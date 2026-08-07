@@ -119,6 +119,57 @@ master re-seeded and the default admin login.
 
 ---
 
+## Where it lives
+
+| | |
+|---|---|
+| **Code** | https://github.com/omarrangila-prog/usman-traders-suppliers (private) |
+| **Online demo** | https://usman-traders-suppliers.vercel.app |
+
+### The online version is a demo, not your books
+
+Vercel runs the app without a permanent disk, so the demo's database sits in
+temporary storage and **is wiped whenever the server restarts** — usually within
+minutes of going idle. It always comes back with the 64-item master and a fresh
+`admin` login. A warning band is shown across the top so nobody mistakes it for
+the real thing.
+
+Use it to show the system to customers, staff or anyone else. **Keep your actual
+records on the copy running on your own computer** (`python3 app.py`), where the
+data sits in `supplydesk.db` and stays there.
+
+To make the online version hold real data permanently, it needs a hosted
+database (a free Neon or Supabase Postgres is enough) — ask and it can be
+switched over.
+
+### Updating either one
+
+```bash
+git add -A && git commit -m "what changed" && git push   # GitHub
+vercel deploy --prod                                     # the demo site
+```
+
+To make the GitHub repo public:
+
+```bash
+gh repo edit omarrangila-prog/usman-traders-suppliers --visibility public
+```
+
+---
+
+## On a phone
+
+The whole system is built for phone use, not just squeezed onto one:
+
+- Tap **☰** for the menu; tap outside it to close.
+- Every table becomes one card per record with labelled fields — no pinching or
+  sideways scrolling.
+- Forms open as full-height sheets with the Save button pinned to the bottom.
+- Order and purchase lines stack into cards, one item each.
+- Input boxes are sized so phones don't zoom when you tap them.
+
+---
+
 ## Files
 
 | File | Contents |
