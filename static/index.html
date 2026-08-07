@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#c1121f">
+<title>Usman Traders &amp; Suppliers</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23d92d20'/><text x='50' y='68' text-anchor='middle' font-size='52' font-family='Georgia' font-weight='bold' fill='%23e8ecb4'>U</text></svg>">
+</head>
+<body>
+
+<!-- Sign in -->
+<div id="login-screen" class="login-screen hidden">
+  <form class="login-card" id="login-form">
+    <img id="login-logo" class="login-logo" alt="">
+    <h1 id="login-company">Usman Traders &amp; Suppliers</h1>
+    <p class="login-sub">Business Management System</p>
+    <label>Username
+      <input name="username" autocomplete="username" required autofocus>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <div class="demo-banner hidden" id="login-demo-banner">
+      Demo deployment &mdash; data resets when the server restarts.
+    </div>
+    <div id="login-error" class="form-error hidden"></div>
+    <button class="btn btn-primary btn-block" type="submit">Sign In</button>
+    <p class="login-hint">First run: <strong>admin</strong> / <strong>admin123</strong></p>
+  </form>
+</div>
+
+<!-- Main application -->
+<div id="app" class="app hidden">
+  <div class="scrim" id="scrim"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <img id="brand-logo" class="brand-logo" alt="">
+      <div class="brand-text">
+        <strong id="brand-name">Usman Traders</strong>
+        <span id="brand-tagline">&amp; Suppliers</span>
+      </div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <span class="avatar" id="user-avatar">A</span>
+        <div>
+          <strong id="user-name">Admin</strong>
+          <span id="user-role">administrator</span>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-block" id="logout-btn">Sign Out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="demo-banner hidden" id="demo-banner">
+      <strong>Demo deployment.</strong> Anything you enter here is erased when the
+      server restarts. Run SupplyDesk on your own computer for real business records.
+    </div>
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu">☰</button>
+      <h1 id="page-title">Dashboard</h1>
+      <div class="topbar-actions" id="page-actions"></div>
+    </header>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root"></div>
+<div id="print-root" class="print-root"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

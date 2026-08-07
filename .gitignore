@@ -1,0 +1,9 @@
+# Your business data - never commit this
+supplydesk.db
+*.db-journal
+
+__pycache__/
+*.pyc
+.vercel
+.DS_Store
+static/__probe.html
