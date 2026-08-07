@@ -60,7 +60,7 @@ Profile**. It then appears on the sidebar, the sign-in screen and every invoice.
 | **Suppliers / Customers** | Contact books; customers also have an account ledger |
 | **Products** | The item master — add, edit, delete |
 | **Inventory** | Stock on hand, value, adjustments, full movement history |
-| **Reports** | Sales, purchases and inventory reports for any date range |
+| **Reports** | Sales, purchases and inventory reports for any date range, downloadable as Excel |
 | **Company Profile** | Business details, logo, currency, invoice footer |
 | **Users & Access** | Staff accounts (admin only) |
 
@@ -87,6 +87,23 @@ totals. Once an order is invoiced it is locked from editing, so the bill and the
 order can never disagree. Record part payments as they come in; the invoice
 shows Unpaid → Partial → Paid by itself.
 
+### Excel reports
+
+Every report has a **⤓ Download Excel** button, and the Products screen has
+**⤓ Excel** for the full item master. These are real `.xlsx` workbooks, not CSV
+files renamed — each opens with:
+
+- **Separate tabs** — Summary, By Customer, By Item, Day by Day (and By
+  Supplier / By Category / Stock List on the other reports).
+- A title and the date range at the top of every sheet.
+- **Frozen header rows** so the columns stay visible as you scroll, with
+  filter arrows already switched on.
+- Amounts as **real numbers** formatted `#,##0.00` — you can sum, sort, pivot
+  and chart them straight away.
+- A shaded **totals row** at the bottom of each table.
+
+Nothing is installed to produce these; the workbook is written directly.
+
 ### Printing
 
 **Print / PDF** on any invoice opens your browser's print dialog — choose
@@ -111,8 +128,9 @@ hours.
 Everything lives in **`supplydesk.db`** in this folder.
 
 **Back it up by copying that one file.** Do it regularly — to a USB stick or
-another drive. Copy it while the server is stopped for a guaranteed-clean copy.
-To restore, put the file back and start the server again.
+another drive. The easiest way is **Company Profile → Download backup now**,
+which hands you a dated copy without stopping the server. To restore, put the
+file back beside `app.py` named `supplydesk.db` and start the server again.
 
 Deleting `supplydesk.db` and restarting gives you a fresh system with the item
 master re-seeded and the default admin login.

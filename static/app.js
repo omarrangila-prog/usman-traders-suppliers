@@ -1134,6 +1134,7 @@ async function purchaseDetail(purchaseId) {
 async function viewProducts() {
   await loadMasters(true);
   pageAction("+ New Product", () => productModal(null));
+  pageAction("⤓ Excel", () => { window.location = "/api/products/export"; }, "btn");
 
   const categories = [...new Set(state.products.map((p) => p.category).filter(Boolean))].sort();
   let search = "", category = "";
@@ -1560,6 +1561,11 @@ async function viewReports() {
     }
   }
 
+  pageAction("⤓ Download Excel", () => {
+    const range = tab === "inventory" ? "" : `?from=${from}&to=${to}`;
+    window.location = `/api/reports/${tab}/export${range}`;
+    toast("Excel file downloading...", "success");
+  });
   pageAction("Print report", () => {
     el("print-root").innerHTML = `<div class="doc"><h2 style="color:var(--brand)">${h(state.company.name)}</h2>
       <p class="muted">${tab.charAt(0).toUpperCase() + tab.slice(1)} report &middot; ${fmtDate(from)} to ${fmtDate(to)}</p>
@@ -1652,12 +1658,25 @@ async function viewCompany() {
       </div>`}
     </form>
 
-    <div class="card"><div class="card-head"><h2>Your account</h2></div>
-      <div class="card-body">
-        <p class="muted" style="margin-top:0">Signed in as <strong>${h(state.user.full_name || state.user.username)}</strong>
-          (${h(state.user.role)}).</p>
-        <button class="btn" id="pw-btn">Change my password</button>
-      </div></div>`;
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><h2>Your account</h2></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">Signed in as <strong>${h(state.user.full_name || state.user.username)}</strong>
+            (${h(state.user.role)}).</p>
+          <button class="btn" id="pw-btn">Change my password</button>
+        </div></div>
+
+      <div class="card"><div class="card-head"><h2>Back up your data</h2></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">Every order, invoice, purchase and stock movement
+            is stored in a single file on this computer. Download a copy and keep it somewhere
+            safe &mdash; a USB stick or another drive. To restore, put the file back beside
+            <span class="mono">app.py</span> as <span class="mono">supplydesk.db</span>.</p>
+          ${state.user.role === "admin"
+            ? `<button class="btn btn-primary" id="backup-btn">⤓ Download backup now</button>`
+            : `<p class="muted">Only an administrator can download the backup.</p>`}
+        </div></div>
+    </div>`;
 
   $("#logo-btn").addEventListener("click", () => $("#logo-file").click());
   $("#logo-file").addEventListener("change", (e) => {
@@ -1670,6 +1689,13 @@ async function viewCompany() {
   });
   $("#logo-clear").addEventListener("click", () => { logoData = ""; $("#logo-preview").removeAttribute("src"); });
   $("#pw-btn").addEventListener("click", passwordModal);
+  const backupButton = $("#backup-btn");
+  if (backupButton) {
+    backupButton.addEventListener("click", () => {
+      window.location = "/api/backup";
+      toast("Backup downloading - keep it somewhere safe.", "success");
+    });
+  }
 
   $("#company-form").addEventListener("submit", async (e) => {
     e.preventDefault();

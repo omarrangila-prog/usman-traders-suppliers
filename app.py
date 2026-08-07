@@ -17,6 +17,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import db
+import xlsx
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -1069,6 +1070,181 @@ def report_inventory(ctx):
 
 
 # --------------------------------------------------------------------------
+# Excel exports
+# --------------------------------------------------------------------------
+
+class FileResponse:
+    def __init__(self, data, filename, content_type):
+        self.data = data
+        self.filename = filename
+        self.content_type = content_type
+
+
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def workbook_response(sheets, name):
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    safe = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")
+    return FileResponse(xlsx.write(sheets), f"{safe}-{stamp}.xlsx", XLSX_TYPE)
+
+
+def company_name(conn):
+    row = conn.execute("SELECT name FROM company WHERE id = 1").fetchone()
+    return row["name"] if row else "SupplyDesk"
+
+
+@route("GET", r"/api/reports/sales/export")
+def export_sales(ctx):
+    report = report_sales(ctx)
+    period = f"{report['from']} to {report['to']}"
+    business = company_name(ctx.conn)
+    summary = report["summary"]
+
+    overview = xlsx.Sheet("Summary", f"{business} - Sales Report", period)
+    overview.columns = [xlsx.Column("Figure", 30), xlsx.Column("Amount", 18, "money")]
+    overview.rows = [
+        ["Invoices issued", summary["invoices"]],
+        ["Gross sales", summary["total"]],
+        ["Amount received", summary["paid"]],
+        ["Outstanding", summary["outstanding"]],
+        ["Discount given", summary["discount"]],
+        ["Tax", summary["tax"]],
+    ]
+
+    customers = xlsx.Sheet("By Customer", "Sales by Customer", period)
+    customers.columns = [xlsx.Column("Customer", 34), xlsx.Column("Invoices", 12, "number"),
+                         xlsx.Column("Amount", 16, "money"), xlsx.Column("Outstanding", 16, "money")]
+    customers.rows = [[r["name"], r["n"], r["amount"], r["outstanding"]]
+                      for r in report["by_customer"]]
+    customers.totals = ["Total", sum(r["n"] for r in report["by_customer"]),
+                        summary["total"], summary["outstanding"]]
+
+    items = xlsx.Sheet("By Item", "Sales by Item", period)
+    items.columns = [xlsx.Column("Code", 12), xlsx.Column("Item", 40),
+                     xlsx.Column("Unit", 10), xlsx.Column("Qty Sold", 13, "number"),
+                     xlsx.Column("Amount", 16, "money")]
+    items.rows = [[r["sku"], r["name"], r["unit"], r["qty"], r["amount"]]
+                  for r in report["by_product"]]
+    items.totals = ["", "Total", "", sum(r["qty"] for r in report["by_product"]),
+                    sum(r["amount"] for r in report["by_product"])]
+
+    daily = xlsx.Sheet("Day by Day", "Daily Sales", period)
+    daily.columns = [xlsx.Column("Date", 16), xlsx.Column("Invoices", 12, "number"),
+                     xlsx.Column("Amount", 16, "money")]
+    daily.rows = [[r["d"], r["n"], r["amount"]] for r in report["by_day"]]
+    daily.totals = ["Total", sum(r["n"] for r in report["by_day"]),
+                    sum(r["amount"] for r in report["by_day"])]
+
+    return workbook_response([overview, customers, items, daily],
+                             f"{business} Sales Report")
+
+
+@route("GET", r"/api/reports/purchases/export")
+def export_purchases(ctx):
+    report = report_purchases(ctx)
+    period = f"{report['from']} to {report['to']}"
+    business = company_name(ctx.conn)
+    summary = report["summary"]
+
+    overview = xlsx.Sheet("Summary", f"{business} - Purchase Report", period)
+    overview.columns = [xlsx.Column("Figure", 30), xlsx.Column("Amount", 18, "money")]
+    overview.rows = [
+        ["Purchases recorded", summary["purchases"]],
+        ["Total purchased", summary["total"]],
+        ["Paid to suppliers", summary["paid"]],
+        ["Still owed", summary["outstanding"]],
+    ]
+
+    suppliers = xlsx.Sheet("By Supplier", "Purchases by Supplier", period)
+    suppliers.columns = [xlsx.Column("Supplier", 34), xlsx.Column("Bills", 12, "number"),
+                         xlsx.Column("Amount", 16, "money"), xlsx.Column("Outstanding", 16, "money")]
+    suppliers.rows = [[r["name"], r["n"], r["amount"], r["outstanding"]]
+                      for r in report["by_supplier"]]
+    suppliers.totals = ["Total", sum(r["n"] for r in report["by_supplier"]),
+                        summary["total"], summary["outstanding"]]
+
+    items = xlsx.Sheet("By Item", "Purchases by Item", period)
+    items.columns = [xlsx.Column("Code", 12), xlsx.Column("Item", 40),
+                     xlsx.Column("Unit", 10), xlsx.Column("Qty Bought", 14, "number"),
+                     xlsx.Column("Amount", 16, "money")]
+    items.rows = [[r["sku"], r["name"], r["unit"], r["qty"], r["amount"]]
+                  for r in report["by_product"]]
+    items.totals = ["", "Total", "", sum(r["qty"] for r in report["by_product"]),
+                    sum(r["amount"] for r in report["by_product"])]
+
+    return workbook_response([overview, suppliers, items], f"{business} Purchase Report")
+
+
+@route("GET", r"/api/reports/inventory/export")
+def export_inventory(ctx):
+    report = report_inventory(ctx)
+    business = company_name(ctx.conn)
+    period = f"As at {today()}"
+    summary = report["summary"]
+
+    overview = xlsx.Sheet("Summary", f"{business} - Inventory Report", period)
+    overview.columns = [xlsx.Column("Figure", 30), xlsx.Column("Value", 18, "money")]
+    overview.rows = [
+        ["Active items", summary["products"]],
+        ["Stock value at cost", summary["cost_value"]],
+        ["Value at sale price", summary["retail_value"]],
+        ["Items out of stock", summary["out_of_stock"]],
+        ["Items low on stock", summary["low_stock"]],
+    ]
+
+    categories = xlsx.Sheet("By Category", "Stock by Category", period)
+    categories.columns = [xlsx.Column("Category", 28), xlsx.Column("Items", 10, "number"),
+                          xlsx.Column("Total Qty", 14, "number"),
+                          xlsx.Column("Value at Cost", 18, "money")]
+    categories.rows = [[r["category"], r["n"], r["qty"], r["cost_value"]]
+                       for r in report["by_category"]]
+    categories.totals = ["Total", sum(r["n"] for r in report["by_category"]),
+                         sum(r["qty"] for r in report["by_category"]), summary["cost_value"]]
+
+    stock = xlsx.Sheet("Stock List", "Full Stock List", period)
+    stock.columns = [xlsx.Column("Code", 12), xlsx.Column("Item", 40),
+                     xlsx.Column("Category", 22), xlsx.Column("Unit", 10),
+                     xlsx.Column("On Hand", 12, "number"), xlsx.Column("Reorder At", 12, "number"),
+                     xlsx.Column("Cost", 14, "money"), xlsx.Column("Sale Price", 14, "money"),
+                     xlsx.Column("Stock Value", 16, "money"), xlsx.Column("Status", 16)]
+    stock.rows = [[r["sku"], r["name"], r["category"], r["unit"], r["stock"],
+                   r["reorder_level"], r["purchase_price"], r["sale_price"],
+                   r["stock_value"], r["stock_state"]] for r in report["items"]]
+    stock.totals = ["", "Total", "", "", "", "", "", "", summary["cost_value"], ""]
+
+    return workbook_response([overview, categories, stock], f"{business} Inventory Report")
+
+
+@route("GET", r"/api/products/export")
+def export_products(ctx):
+    ctx.require_user()
+    business = company_name(ctx.conn)
+    sheet = xlsx.Sheet("Item Master", f"{business} - Item Master", f"As at {today()}")
+    sheet.columns = [xlsx.Column("Code", 12), xlsx.Column("Item Description", 42),
+                     xlsx.Column("Category", 22), xlsx.Column("Unit", 10),
+                     xlsx.Column("Pack Size", 14), xlsx.Column("Cost", 14, "money"),
+                     xlsx.Column("Sale Price", 14, "money"), xlsx.Column("On Hand", 12, "number"),
+                     xlsx.Column("Reorder At", 12, "number"), xlsx.Column("Active", 10)]
+    sheet.rows = [[p["sku"], p["name"], p["category"], p["unit"], p["pack_size"],
+                   p["purchase_price"], p["sale_price"], p["stock"], p["reorder_level"],
+                   "Yes" if p["active"] else "No"] for p in list_products(ctx)]
+    return workbook_response([sheet], f"{business} Item Master")
+
+
+@route("GET", r"/api/backup")
+def download_backup(ctx):
+    """Hand back the database file so it can be kept somewhere safe."""
+    ctx.require_admin()
+    if db.IS_POSTGRES:
+        raise HttpError(400, "This installation uses Postgres; take the backup from there.")
+    with open(db.DB_PATH, "rb") as handle:
+        data = handle.read()
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+    return FileResponse(data, f"supplydesk-backup-{stamp}.db", "application/octet-stream")
+
+
+# --------------------------------------------------------------------------
 # Request handling
 # --------------------------------------------------------------------------
 
@@ -1111,6 +1287,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "sd_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
         self.end_headers()
         self.wfile.write(data)
+
+    def send_file(self, response):
+        self.send_response(200)
+        self.send_header("Content-Type", response.content_type)
+        self.send_header("Content-Length", str(len(response.data)))
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{response.filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(response.data)
 
     def current_session(self, conn):
         cookie_header = self.headers.get("Cookie")
@@ -1162,6 +1348,8 @@ class Handler(BaseHTTPRequestHandler):
                 if match:
                     args = [int(g) for g in match.groups()]
                     result = handler(ctx, *args)
+                    if isinstance(result, FileResponse):
+                        return self.send_file(result)
                     return self.send_json(result, cookie=ctx.set_cookie,
                                           clear_cookie=ctx.clear_cookie)
             raise HttpError(404, f"No API endpoint for {method} {path}")
