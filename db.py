@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import os
 import sqlite3
+import time
 
 # Serverless hosts (Vercel) give you a read-only project directory and a scratch
 # /tmp that is wiped whenever the instance recycles - fine for a demo, not for
@@ -28,10 +29,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    token      TEXT PRIMARY KEY,
-    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    expires_at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS company (
@@ -212,6 +212,60 @@ def hash_password(password, salt=None):
 def verify_password(password, password_hash, salt):
     candidate, _ = hash_password(password, salt)
     return hmac.compare_digest(candidate, password_hash)
+
+
+# --------------------------------------------------------------------------
+# Sessions
+#
+# Signed cookies rather than a sessions table. A serverless host runs several
+# instances that share no storage, so a row written by one is invisible to the
+# next and the user gets bounced to the login screen at random. A signature any
+# instance can verify with the same secret has no such problem.
+# --------------------------------------------------------------------------
+
+SESSION_HOURS = 12
+
+
+def session_secret(conn):
+    """Shared signing key. Set SUPPLYDESK_SECRET when running more than one
+    instance; otherwise one is generated and kept in the database."""
+    from_env = os.environ.get("SUPPLYDESK_SECRET")
+    if from_env:
+        return from_env.encode()
+    row = conn.execute("SELECT value FROM settings WHERE key = 'session_secret'").fetchone()
+    if row:
+        return bytes.fromhex(row["value"])
+    key = os.urandom(32)
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('session_secret', ?)",
+                 (key.hex(),))
+    conn.commit()
+    return key
+
+
+def _sign(secret, payload):
+    return hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()[:40]
+
+
+def make_token(conn, user_id):
+    payload = f"{user_id}.{int(time.time()) + SESSION_HOURS * 3600}"
+    return f"{payload}.{_sign(session_secret(conn), payload)}"
+
+
+def read_token(conn, token):
+    """Return the user id carried by a valid, unexpired token, else None."""
+    parts = (token or "").split(".")
+    if len(parts) != 3:
+        return None
+    user_id, expires, signature = parts
+    payload = f"{user_id}.{expires}"
+    if not hmac.compare_digest(signature, _sign(session_secret(conn), payload)):
+        return None
+    try:
+        if int(expires) < time.time():
+            return None
+        return int(user_id)
+    except ValueError:
+        return None
 
 
 # Usman Traders & Suppliers item master.

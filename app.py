@@ -10,10 +10,9 @@ import json
 import mimetypes
 import os
 import re
-import secrets
 import sys
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -21,7 +20,7 @@ import db
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-SESSION_HOURS = 12
+SESSION_HOURS = db.SESSION_HOURS
 MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 
 ROUTES = []
@@ -82,24 +81,13 @@ def login(ctx):
     if not user or not db.verify_password(password, user["password_hash"], user["salt"]):
         raise HttpError(401, "Invalid username or password.")
 
-    token = secrets.token_urlsafe(32)
-    expires = (datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)).replace(microsecond=0)
-    ctx.conn.execute(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)",
-        (token, user["id"], expires.isoformat()),
-    )
-    ctx.conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso(),))
-    ctx.conn.commit()
-    ctx.set_cookie = token
+    ctx.set_cookie = db.make_token(ctx.conn, user["id"])
     return {"user": {"id": user["id"], "username": user["username"],
                      "full_name": user["full_name"], "role": user["role"]}}
 
 
 @route("POST", r"/api/logout")
 def logout(ctx):
-    if ctx.token:
-        ctx.conn.execute("DELETE FROM sessions WHERE token = ?", (ctx.token,))
-        ctx.conn.commit()
     ctx.clear_cookie = True
     return {"ok": True}
 
@@ -170,7 +158,8 @@ def update_user(ctx, user_id):
         pw_hash, salt = db.hash_password(text(body.get("password")))
         ctx.conn.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
                          (pw_hash, salt, user_id))
-        ctx.conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        # Signed tokens carry no server-side record, so an already-issued one
+        # stays valid until it expires. Deactivate the account to cut it off now.
     ctx.conn.commit()
     return {"ok": True}
 
@@ -1131,10 +1120,11 @@ class Handler(BaseHTTPRequestHandler):
         if not token:
             return None, None
         token = token.value
+        user_id = db.read_token(conn, token)
+        if user_id is None:
+            return token, None
         user = conn.execute(
-            """SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-               WHERE s.token = ? AND s.expires_at > ? AND u.active = 1""",
-            (token, now_iso())).fetchone()
+            "SELECT * FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
         return token, user
 
     def read_body(self):
