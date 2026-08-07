@@ -1,0 +1,3 @@
+# Only needed when DATABASE_URL points at Postgres.
+# Running on SQLite (the default) needs nothing installed at all.
+psycopg2-binary==2.9.10

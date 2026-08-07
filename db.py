@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import sqlite3
 import time
 
@@ -50,23 +51,6 @@ CREATE TABLE IF NOT EXISTS company (
     footer   TEXT NOT NULL DEFAULT 'Thank you for your business.'
 );
 
-CREATE TABLE IF NOT EXISTS products (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    sku            TEXT NOT NULL UNIQUE,
-    name           TEXT NOT NULL,
-    category       TEXT NOT NULL DEFAULT '',
-    unit           TEXT NOT NULL DEFAULT 'pcs',
-    pack_size      TEXT NOT NULL DEFAULT '',
-    purchase_price REAL NOT NULL DEFAULT 0,
-    sale_price     REAL NOT NULL DEFAULT 0,
-    stock          REAL NOT NULL DEFAULT 0,
-    reorder_level  REAL NOT NULL DEFAULT 0,
-    supplier_id    INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
-    notes          TEXT NOT NULL DEFAULT '',
-    active         INTEGER NOT NULL DEFAULT 1,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE IF NOT EXISTS customers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,
@@ -93,6 +77,23 @@ CREATE TABLE IF NOT EXISTS suppliers (
     notes      TEXT NOT NULL DEFAULT '',
     active     INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS products (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku            TEXT NOT NULL UNIQUE,
+    name           TEXT NOT NULL,
+    category       TEXT NOT NULL DEFAULT '',
+    unit           TEXT NOT NULL DEFAULT 'pcs',
+    pack_size      TEXT NOT NULL DEFAULT '',
+    purchase_price REAL NOT NULL DEFAULT 0,
+    sale_price     REAL NOT NULL DEFAULT 0,
+    stock          REAL NOT NULL DEFAULT 0,
+    reorder_level  REAL NOT NULL DEFAULT 0,
+    supplier_id    INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    notes          TEXT NOT NULL DEFAULT '',
+    active         INTEGER NOT NULL DEFAULT 1,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -195,11 +196,119 @@ CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
 """
 
 
+# --------------------------------------------------------------------------
+# Storage backend
+#
+# SQLite by default - one file, nothing to install. Set DATABASE_URL to a
+# Postgres connection string and the same application SQL runs there instead,
+# which is what makes durable hosting possible. The differences between the two
+# dialects are absorbed here so no query elsewhere has to know which is in use.
+# --------------------------------------------------------------------------
+
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+_INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
+_NO_ID_TABLES = {"settings"}
+
+if IS_POSTGRES:
+    import psycopg2
+    import psycopg2.extensions
+    import psycopg2.extras
+
+    # NUMERIC arrives as Decimal, which json.dumps would render as a quoted
+    # string and the browser would then refuse to do arithmetic on.
+    psycopg2.extensions.register_type(psycopg2.extensions.new_type(
+        psycopg2.extensions.DECIMAL.values, "DEC2FLOAT",
+        lambda value, _cur: float(value) if value is not None else None))
+
+
+def _to_postgres(sql):
+    """Rewrite the SQLite dialect the queries are written in."""
+    sql = sql.replace("?", "%s")
+    # SQLite date arithmetic used by the dashboard trend
+    sql = sql.replace("date('now', '-13 days')", "to_char(CURRENT_DATE - 13, 'YYYY-MM-DD')")
+    return sql
+
+
+class Cursor:
+    """Cursor that speaks either dialect and always exposes lastrowid."""
+
+    def __init__(self, raw, postgres):
+        self._raw = raw
+        self._postgres = postgres
+        self.lastrowid = None
+
+    def execute(self, sql, params=()):
+        if not self._postgres:
+            self._raw.execute(sql, params)
+            self.lastrowid = self._raw.lastrowid
+            return self
+
+        statement = _to_postgres(sql)
+        match = _INSERT.match(statement)
+        returns_id = bool(match) and match.group(1).lower() not in _NO_ID_TABLES \
+            and "returning" not in statement.lower()
+        if returns_id:
+            statement += " RETURNING id"
+        self._raw.execute(statement, params)
+        self.lastrowid = self._raw.fetchone()[0] if returns_id else None
+        return self
+
+    def executemany(self, sql, seq):
+        statement = _to_postgres(sql) if self._postgres else sql
+        self._raw.executemany(statement, seq)
+        return self
+
+    def fetchone(self):
+        return self._raw.fetchone()
+
+    def fetchall(self):
+        return self._raw.fetchall()
+
+    def __iter__(self):
+        return iter(self._raw.fetchall())
+
+
+class Connection:
+    """Thin wrapper so callers can keep using conn.execute(...) on both engines."""
+
+    def __init__(self, raw, postgres):
+        self._raw = raw
+        self.postgres = postgres
+
+    def cursor(self):
+        raw = (self._raw.cursor(cursor_factory=psycopg2.extras.DictCursor)
+               if self.postgres else self._raw.cursor())
+        return Cursor(raw, self.postgres)
+
+    def execute(self, sql, params=()):
+        return self.cursor().execute(sql, params)
+
+    def executescript(self, script):
+        if self.postgres:
+            self.cursor().execute(script)
+        else:
+            self._raw.executescript(script)
+        return self
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        self._raw.close()
+
+
 def connect():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if IS_POSTGRES:
+        return Connection(psycopg2.connect(DATABASE_URL, connect_timeout=10), True)
+    raw = sqlite3.connect(DB_PATH)
+    raw.row_factory = sqlite3.Row
+    raw.execute("PRAGMA foreign_keys = ON")
+    return Connection(raw, False)
 
 
 def hash_password(password, salt=None):
@@ -236,8 +345,10 @@ def session_secret(conn):
     if row:
         return bytes.fromhex(row["value"])
     key = os.urandom(32)
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('session_secret', ?)",
-                 (key.hex(),))
+    upsert = ("INSERT INTO settings (key, value) VALUES ('session_secret', ?) "
+              "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" if conn.postgres
+              else "INSERT OR REPLACE INTO settings (key, value) VALUES ('session_secret', ?)")
+    conn.execute(upsert, (key.hex(),))
     conn.commit()
     return key
 
@@ -420,9 +531,31 @@ def seed(conn):
     conn.commit()
 
 
+# Overload ROUND so the two-argument form the reports use accepts the double
+# precision columns, matching SQLite's behaviour.
+PG_COMPAT = """
+CREATE OR REPLACE FUNCTION round(double precision, integer) RETURNS numeric
+  LANGUAGE sql IMMUTABLE AS $fn$ SELECT round($1::numeric, $2) $fn$;
+"""
+
+
+def postgres_schema(sql):
+    """Translate the canonical SQLite schema into Postgres DDL."""
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql)
+    sql = sql.replace(
+        "(datetime('now'))",
+        "(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS'))")
+    return sql
+
+
 def init():
     conn = connect()
-    conn.executescript(SCHEMA)
+    if conn.postgres:
+        conn.executescript(PG_COMPAT)
+        conn.executescript(postgres_schema(SCHEMA))
+    else:
+        conn.executescript(SCHEMA)
     conn.commit()
     seed(conn)
     return conn

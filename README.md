@@ -128,19 +128,44 @@ master re-seeded and the default admin login.
 
 ### The online version is a demo, not your books
 
-Vercel runs the app without a permanent disk, so the demo's database sits in
-temporary storage and **is wiped whenever the server restarts** — usually within
-minutes of going idle. It always comes back with the 64-item master and a fresh
-`admin` login. A warning band is shown across the top so nobody mistakes it for
-the real thing.
+Vercel runs the app without a permanent disk, and it runs **several copies at
+once**. Each copy keeps its own scratch database in temporary storage, so:
 
-Use it to show the system to customers, staff or anyone else. **Keep your actual
-records on the copy running on your own computer** (`python3 app.py`), where the
-data sits in `supplydesk.db` and stays there.
+- Data is **wiped** whenever a copy restarts — usually minutes after going idle.
+  It comes back with the 64-item master and a fresh `admin` login.
+- Something you save may **not appear** on a later screen, if that click was
+  answered by a different copy.
 
-To make the online version hold real data permanently, it needs a hosted
-database (a free Neon or Supabase Postgres is enough) — ask and it can be
-switched over.
+Staying signed in is solved (sessions are signed cookies that every copy
+accepts), but the data problem cannot be fixed without a shared database. A
+warning band sits across the top so nobody mistakes the demo for the real thing.
+
+Use it to **show** the system. **Keep your actual records on the copy running on
+your own computer** (`python3 app.py`), where the data lives in `supplydesk.db`
+and stays put.
+
+### Making the online version permanent
+
+The app already speaks Postgres as well as SQLite. Give it a connection string
+and it stores data properly, with no code changes:
+
+```bash
+# locally
+DATABASE_URL="postgresql://user:pass@host/dbname" python3 app.py
+
+# on Vercel
+vercel env add DATABASE_URL production     # paste the string when prompted
+vercel deploy --prod
+```
+
+A free database from [neon.tech](https://neon.tech) or
+[supabase.com](https://supabase.com) is plenty — neither needs a card. The
+tables and the 64-item master are created automatically on first connection.
+Set `SUPPLYDESK_SECRET` too (any long random string) so signed-in sessions are
+accepted by every server copy.
+
+Which engine is in use is decided purely by whether `DATABASE_URL` is set, so
+the same code runs on your laptop and in the cloud.
 
 ### Updating either one
 
