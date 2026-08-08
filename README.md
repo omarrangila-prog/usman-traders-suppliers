@@ -157,6 +157,21 @@ master re-seeded and the default admin login.
 The app is a PWA: the admin app installs from `/`, the field form from
 `/field.html`, both from the same address.
 
+### Going online in one command
+
+`tools/cloudflared` gives the app a public HTTPS address with no account, no
+domain and no port forwarding:
+
+```bash
+python3 app.py                                   # terminal 1
+./tools/cloudflared tunnel --url http://localhost:8000   # terminal 2
+```
+
+It prints a `https://….trycloudflare.com` link. That link works from anywhere,
+installs as a PWA on Android and iPhone, and syncs field entries over the
+internet. The address changes each time it restarts — for a fixed one, log in
+to a free Cloudflare account and create a named tunnel.
+
 ### HTTPS is required — this is not optional
 
 Browsers only allow service workers and app installation on **HTTPS** (or

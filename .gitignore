@@ -15,3 +15,4 @@ pocketbase/pocketbase
 pocketbase/pb_data/
 pocketbase/CHANGELOG.md
 pocketbase/LICENSE.md
+tools/cloudflared
