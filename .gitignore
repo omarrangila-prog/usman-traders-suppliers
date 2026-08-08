@@ -11,3 +11,7 @@ static/__probe.html
 # Appwrite / database credentials - never commit
 .env
 appwrite.env
+pocketbase/pocketbase
+pocketbase/pb_data/
+pocketbase/CHANGELOG.md
+pocketbase/LICENSE.md
