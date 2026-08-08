@@ -1,4 +1,4 @@
-"""SQLite schema, connection helpers and seed data for SupplyDesk."""
+"""SQLite schema, connection helpers and seed data for Usman Traders."""
 
 import base64
 import hashlib
@@ -13,9 +13,9 @@ import time
 # real records. DEMO_MODE drives the warning banner in the UI.
 DEMO_MODE = bool(os.environ.get("VERCEL"))
 
-DB_PATH = os.environ.get("SUPPLYDESK_DB") or (
-    "/tmp/supplydesk.db" if DEMO_MODE
-    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "supplydesk.db")
+DB_PATH = os.environ.get("UT_DB") or (
+    "/tmp/usmantraders.db" if DEMO_MODE
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "usmantraders.db")
 )
 
 SCHEMA = """
@@ -359,9 +359,9 @@ SESSION_HOURS = 12
 
 
 def session_secret(conn):
-    """Shared signing key. Set SUPPLYDESK_SECRET when running more than one
+    """Shared signing key. Set UT_SECRET when running more than one
     instance; otherwise one is generated and kept in the database."""
-    from_env = os.environ.get("SUPPLYDESK_SECRET")
+    from_env = os.environ.get("UT_SECRET")
     if from_env:
         return from_env.encode()
     row = conn.execute("SELECT value FROM settings WHERE key = 'session_secret'").fetchone()

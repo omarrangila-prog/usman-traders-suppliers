@@ -12,7 +12,7 @@ needed, all data stays in one file on your machine.
 ## Running it
 
 ```bash
-cd ~/Projects/SupplyDesk
+cd ~/Projects/Usman Traders
 python3 app.py          # then open http://localhost:8000
 ```
 
@@ -25,7 +25,7 @@ the administrator, so nothing stands between you and the day's work.
 To switch the login screen back on:
 
 ```bash
-SUPPLYDESK_LOGIN=on python3 app.py     # then sign in as admin / admin123
+UT_LOGIN=on python3 app.py     # then sign in as admin / admin123
 ```
 
 Leave it off only on a machine you trust, since anyone who can reach the
@@ -140,14 +140,14 @@ hours.
 
 ## Your data
 
-Everything lives in **`supplydesk.db`** in this folder.
+Everything lives in **`usmantraders.db`** in this folder.
 
 **Back it up by copying that one file.** Do it regularly — to a USB stick or
 another drive. The easiest way is **Company Profile → Download backup now**,
 which hands you a dated copy without stopping the server. To restore, put the
-file back beside `app.py` named `supplydesk.db` and start the server again.
+file back beside `app.py` named `usmantraders.db` and start the server again.
 
-Deleting `supplydesk.db` and restarting gives you a fresh system with the item
+Deleting `usmantraders.db` and restarting gives you a fresh system with the item
 master re-seeded and the default admin login.
 
 ---
@@ -174,9 +174,9 @@ Any of these gives you HTTPS:
 ### Environment
 
 ```bash
-SUPPLYDESK_LOGIN=on                  # default; 'off' removes the login screen
-SUPPLYDESK_SECRET=<long random>      # required if more than one server process
-SUPPLYDESK_FIELD_TOKEN=<code>        # the access code the field phones use
+UT_LOGIN=on                  # default; 'off' removes the login screen
+UT_SECRET=<long random>      # required if more than one server process
+UT_FIELD_TOKEN=<code>        # the access code the field phones use
 DATABASE_URL=postgresql://...        # optional; SQLite is used when unset
 ```
 
@@ -187,9 +187,9 @@ checks.
 
 - [ ] Serve over HTTPS
 - [ ] Change the `admin` password
-- [ ] Set `SUPPLYDESK_FIELD_TOKEN` to something private
-- [ ] Set `SUPPLYDESK_SECRET`
-- [ ] Schedule a copy of `supplydesk.db` somewhere off the machine
+- [ ] Set `UT_FIELD_TOKEN` to something private
+- [ ] Set `UT_SECRET`
+- [ ] Schedule a copy of `usmantraders.db` somewhere off the machine
 
 ## Where it lives
 
@@ -213,7 +213,7 @@ accepts), but the data problem cannot be fixed without a shared database. A
 warning band sits across the top so nobody mistakes the demo for the real thing.
 
 Use it to **show** the system. **Keep your actual records on the copy running on
-your own computer** (`python3 app.py`), where the data lives in `supplydesk.db`
+your own computer** (`python3 app.py`), where the data lives in `usmantraders.db`
 and stays put.
 
 ### Making the online version permanent
@@ -233,7 +233,7 @@ vercel deploy --prod
 A free database from [neon.tech](https://neon.tech) or
 [supabase.com](https://supabase.com) is plenty — neither needs a card. The
 tables and the 64-item master are created automatically on first connection.
-Set `SUPPLYDESK_SECRET` too (any long random string) so signed-in sessions are
+Set `UT_SECRET` too (any long random string) so signed-in sessions are
 accepted by every server copy.
 
 Which engine is in use is decided purely by whether `DATABASE_URL` is set, so
@@ -276,4 +276,4 @@ The whole system is built for phone use, not just squeezed onto one:
 | `static/index.html` | Page shell |
 | `static/styles.css` | All styling, including the print layout |
 | `static/app.js` | The user interface |
-| `supplydesk.db` | Your data (created on first run) |
+| `usmantraders.db` | Your data (created on first run) |

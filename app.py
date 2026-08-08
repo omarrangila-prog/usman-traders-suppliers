@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SupplyDesk - business management server for a trading & supply company.
+"""Usman Traders - business management server for a trading & supply company.
 
 Runs on the Python standard library only: http.server + sqlite3.
     python3 app.py           # http://localhost:8000
@@ -29,12 +29,12 @@ MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 # Sign-in is required unless explicitly switched off. Turning it off is fine on
 # a machine only you can reach; on anything the outside world can open it means
 # anyone with the address can read and change everything.
-LOGIN_REQUIRED = os.environ.get("SUPPLYDESK_LOGIN", "on").lower() not in ("0", "off", "false", "no")
+LOGIN_REQUIRED = os.environ.get("UT_LOGIN", "on").lower() not in ("0", "off", "false", "no")
 
 # The field phones authenticate with this shared token instead of a login, so
 # the buyer never handles an admin password. Unset means the field endpoints
 # fall back to requiring a normal session.
-FIELD_TOKEN = os.environ.get("SUPPLYDESK_FIELD_TOKEN", "")
+FIELD_TOKEN = os.environ.get("UT_FIELD_TOKEN", "")
 
 ROUTES = []
 
@@ -1281,7 +1281,7 @@ def workbook_response(sheets, name):
 
 def company_name(conn):
     row = conn.execute("SELECT name FROM company WHERE id = 1").fetchone()
-    return row["name"] if row else "SupplyDesk"
+    return row["name"] if row else "Usman Traders"
 
 
 @route("GET", r"/api/reports/sales/export")
@@ -1438,7 +1438,7 @@ def download_backup(ctx):
     with open(db.DB_PATH, "rb") as handle:
         data = handle.read()
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
-    return FileResponse(data, f"supplydesk-backup-{stamp}.db", "application/octet-stream")
+    return FileResponse(data, f"usmantraders-backup-{stamp}.db", "application/octet-stream")
 
 
 # --------------------------------------------------------------------------
@@ -1472,7 +1472,7 @@ class Context:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "SupplyDesk"
+    server_version = "Usman Traders"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -1487,10 +1487,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         if cookie:
             self.send_header("Set-Cookie",
-                             f"sd_session={cookie}; Path=/; HttpOnly; SameSite=Strict; "
+                             f"ut_session={cookie}; Path=/; HttpOnly; SameSite=Strict; "
                              f"Max-Age={SESSION_HOURS * 3600}")
         if clear_cookie:
-            self.send_header("Set-Cookie", "sd_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+            self.send_header("Set-Cookie", "ut_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1510,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
         cookie_header = self.headers.get("Cookie")
         if not cookie_header:
             return None, None
-        token = SimpleCookie(cookie_header).get("sd_session")
+        token = SimpleCookie(cookie_header).get("ut_session")
         if not token:
             return None, None
         token = token.value
@@ -1605,7 +1605,7 @@ def main():
     conn = db.init()
     conn.close()
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"\n  SupplyDesk running at  http://localhost:{port}")
+    print(f"\n  Usman Traders running at  http://localhost:{port}")
     print(f"  Database               {db.DB_PATH}")
     print("  Default login          admin / admin123   (change it after first sign-in)\n")
     try:

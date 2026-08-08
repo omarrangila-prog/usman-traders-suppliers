@@ -1,4 +1,4 @@
-"""Appwrite client for SupplyDesk.
+"""Appwrite client for Usman Traders.
 
 The equivalent of the `appwrite.js` lib module from Appwrite's setup guide,
 written for this project: the backend is Python and owns the data, so the
@@ -23,7 +23,7 @@ ENDPOINT = os.environ.get("APPWRITE_ENDPOINT", "https://fra.cloud.appwrite.io/v1
 PROJECT_ID = os.environ.get("APPWRITE_PROJECT", "6a7758560009963f67b0")
 PROJECT_NAME = os.environ.get("APPWRITE_PROJECT_NAME", "database spice")
 API_KEY = os.environ.get("APPWRITE_KEY", "")
-DATABASE_ID = os.environ.get("APPWRITE_DB", "supplydesk")
+DATABASE_ID = os.environ.get("APPWRITE_DB", "usmantraders")
 
 TIMEOUT = 15
 
@@ -99,7 +99,7 @@ class Client:
 
 
 class Databases:
-    """The document operations SupplyDesk needs."""
+    """The document operations Usman Traders needs."""
 
     def __init__(self, client, database_id=DATABASE_ID):
         self.client = client

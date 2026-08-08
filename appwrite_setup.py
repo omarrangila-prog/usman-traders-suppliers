@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the SupplyDesk schema inside an Appwrite project.
+"""Create the Usman Traders schema inside an Appwrite project.
 
 Reads its configuration from the environment and is safe to re-run - anything
 that already exists is left alone.
@@ -23,7 +23,7 @@ import urllib.request
 ENDPOINT = os.environ.get("APPWRITE_ENDPOINT", "https://fra.cloud.appwrite.io/v1").rstrip("/")
 PROJECT = os.environ.get("APPWRITE_PROJECT", "")
 API_KEY = os.environ.get("APPWRITE_KEY", "")
-DATABASE_ID = os.environ.get("APPWRITE_DB", "supplydesk")
+DATABASE_ID = os.environ.get("APPWRITE_DB", "usmantraders")
 
 # name -> [(key, type, size/required spec)]
 #   s:<size> string, i integer, d double, b boolean
@@ -143,7 +143,7 @@ def main():
     print(f"Appwrite {ENDPOINT}  project {PROJECT}\n")
 
     status, payload = call("POST", "/databases",
-                           {"databaseId": DATABASE_ID, "name": "SupplyDesk"})
+                           {"databaseId": DATABASE_ID, "name": "Usman Traders"})
     if status in (200, 201):
         print(f"  created  database '{DATABASE_ID}'")
     elif status == 409:

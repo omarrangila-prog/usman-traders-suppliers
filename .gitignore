@@ -1,5 +1,5 @@
 # Your business data - never commit this
-supplydesk.db
+usmantraders.db
 *.db-journal
 
 __pycache__/

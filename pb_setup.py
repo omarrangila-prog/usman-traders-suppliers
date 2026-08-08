@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the SupplyDesk schema in PocketBase and import the SQLite data.
+"""Create the Usman Traders schema in PocketBase and import the SQLite data.
 
 PocketBase is a single Go binary wrapping SQLite, with a REST API, realtime
 subscriptions and an admin UI. This mirrors the local schema into it and copies
@@ -21,7 +21,7 @@ import urllib.request
 PB_URL = os.environ.get("PB_URL", "http://127.0.0.1:8090").rstrip("/")
 PB_EMAIL = os.environ.get("PB_EMAIL", "admin@usmantraders.local")
 PB_PASSWORD = os.environ.get("PB_PASSWORD", "UsmanTraders2026")
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "supplydesk.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usmantraders.db")
 
 T, N, B = "text", "number", "bool"
 
@@ -186,7 +186,7 @@ def main():
     print("collections")
     create_collections()
 
-    print("\nimporting data from supplydesk.db")
+    print("\nimporting data from usmantraders.db")
     for table, collection in (("company", "company"), ("users", "app_users"),
                               ("customers", "customers"), ("suppliers", "suppliers"),
                               ("products", "products"), ("orders", "orders"),

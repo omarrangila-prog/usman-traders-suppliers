@@ -29,14 +29,20 @@ function uuid() {
 
 const token = () => localStorage.getItem(TOKEN_KEY) || "";
 
+/* An in-page sheet rather than window.prompt: prompt() blocks the page while
+   it is open, and installed PWAs often suppress it outright. */
+let codeAsked = false;
 function askForToken(reason) {
-  const given = window.prompt((reason ? reason + "\n\n" : "") +
-    "Access code for this phone (ask the office):", token());
-  if (given !== null) {
-    localStorage.setItem(TOKEN_KEY, given.trim());
-    toast("Access code saved.", "ok");
-    sync();
-  }
+  if (codeAsked) return;
+  codeAsked = true;
+  if (reason) $("code-why").textContent = reason;
+  $("code-input").value = token();
+  $("code-sheet").classList.remove("hidden");
+  setTimeout(() => $("code-input").focus(), 50);
+}
+function closeTokenSheet() {
+  $("code-sheet").classList.add("hidden");
+  codeAsked = false;
 }
 
 function device() {
@@ -328,6 +334,15 @@ $("clear").addEventListener("click", () => {
   $("city").value = ""; $("notes").value = "";
   renderLines();
 });
+
+$("code-save").addEventListener("click", () => {
+  localStorage.setItem(TOKEN_KEY, $("code-input").value.trim());
+  closeTokenSheet();
+  toast("Access code saved.", "ok");
+  loadCatalogue();
+  sync();
+});
+$("code-cancel").addEventListener("click", closeTokenSheet);
 
 window.addEventListener("online", showNetwork);
 window.addEventListener("offline", showNetwork);

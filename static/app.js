@@ -1746,7 +1746,7 @@ async function viewCompany() {
           <p class="muted" style="margin-top:0">Every order, invoice, purchase and stock movement
             is stored in a single file on this computer. Download a copy and keep it somewhere
             safe &mdash; a USB stick or another drive. To restore, put the file back beside
-            <span class="mono">app.py</span> as <span class="mono">supplydesk.db</span>.</p>
+            <span class="mono">app.py</span> as <span class="mono">usmantraders.db</span>.</p>
           ${state.user.role === "admin"
             ? `<button class="btn btn-primary" id="backup-btn">⤓ Download backup now</button>`
             : `<p class="muted">Only an administrator can download the backup.</p>`}
