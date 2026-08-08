@@ -6,6 +6,7 @@ Runs on the Python standard library only: http.server + sqlite3.
     python3 app.py 9000      # custom port
 """
 
+import hmac
 import json
 import mimetypes
 import os
@@ -25,11 +26,15 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 SESSION_HOURS = db.SESSION_HOURS
 MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 
-# Sign-in is switched off by default: the app opens straight to the dashboard
-# and every request runs as the administrator. Set SUPPLYDESK_LOGIN=on to put
-# the login screen back. Leave it off only where the machine itself is trusted,
-# since anyone who can reach the address can then see and change everything.
-LOGIN_REQUIRED = os.environ.get("SUPPLYDESK_LOGIN", "").lower() in ("1", "on", "true", "yes")
+# Sign-in is required unless explicitly switched off. Turning it off is fine on
+# a machine only you can reach; on anything the outside world can open it means
+# anyone with the address can read and change everything.
+LOGIN_REQUIRED = os.environ.get("SUPPLYDESK_LOGIN", "on").lower() not in ("0", "off", "false", "no")
+
+# The field phones authenticate with this shared token instead of a login, so
+# the buyer never handles an admin password. Unset means the field endpoints
+# fall back to requiring a normal session.
+FIELD_TOKEN = os.environ.get("SUPPLYDESK_FIELD_TOKEN", "")
 
 ROUTES = []
 
@@ -196,6 +201,13 @@ def delete_user(ctx, user_id):
 
 COMPANY_FIELDS = ["name", "tagline", "logo", "address", "city", "phone",
                   "email", "website", "tax_id", "currency", "footer"]
+
+
+@route("GET", r"/api/health")
+def health(ctx):
+    ctx.conn.execute("SELECT 1").fetchone()
+    return {"ok": True, "time": now_iso(), "storage": "postgres" if db.IS_POSTGRES else "sqlite",
+            "login_required": LOGIN_REQUIRED, "field_token_set": bool(FIELD_TOKEN)}
 
 
 @route("GET", r"/api/branding")
@@ -1092,6 +1104,7 @@ def report_inventory(ctx):
 @route("GET", r"/api/field/bootstrap")
 def field_bootstrap(ctx):
     """Everything the phone caches so the form still works with no signal."""
+    ctx.require_field_access()
     return {
         "company": company_name(ctx.conn),
         "products": rows(ctx.conn.execute(
@@ -1109,6 +1122,7 @@ def field_bootstrap(ctx):
 def field_sync(ctx):
     """Accept a batch queued on a phone. Safe to call repeatedly: an entry
     already stored is acknowledged rather than inserted again."""
+    ctx.require_field_access()
     entries = ctx.body.get("entries")
     if not isinstance(entries, list):
         raise HttpError(400, "Expected a list of entries.")
@@ -1432,9 +1446,10 @@ def download_backup(ctx):
 # --------------------------------------------------------------------------
 
 class Context:
-    def __init__(self, conn, body, query, token, user):
+    def __init__(self, conn, body, query, token, user, field_token=""):
         self.conn, self.body, self.query = conn, body, query
         self.token, self.user = token, user
+        self.field_token = field_token
         self.set_cookie = None
         self.clear_cookie = False
 
@@ -1446,6 +1461,14 @@ class Context:
         self.require_user()
         if self.user["role"] != "admin":
             raise HttpError(403, "This action requires an administrator account.")
+
+    def require_field_access(self):
+        """A signed-in user, or a phone presenting the field token."""
+        if self.user:
+            return
+        if FIELD_TOKEN and hmac.compare_digest(self.field_token or "", FIELD_TOKEN):
+            return
+        raise HttpError(401, "This device is not authorised for field entry.")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1524,7 +1547,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_body() if method in ("POST", "PUT", "DELETE") else {}
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
             token, user = self.current_session(conn)
-            ctx = Context(conn, body, query, token, user)
+            ctx = Context(conn, body, query, token, user,
+                          self.headers.get("X-Field-Token", ""))
 
             for verb, pattern, handler in ROUTES:
                 if verb != method:

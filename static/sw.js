@@ -1,30 +1,75 @@
-/* Keeps the field form openable with no connection.
-   The shell is cached on install and served from cache first; API calls always
-   go to the network, because stale business data is worse than none. */
-const CACHE = "utf-field-v1";
-const SHELL = ["/field.html", "/field.js", "/logo.png", "/manifest.json"];
+/* Service worker for Usman Traders.
+ *
+ * Scope is the whole site, so both the admin app and the field form install
+ * and open without a connection.
+ *
+ * Strategy:
+ *   - navigation + shell assets: network first, falling back to cache. Stale
+ *     business software is worse than slow business software, so a reachable
+ *     server always wins; the cache is the safety net.
+ *   - /api/: never cached. Showing yesterday's stock as today's would be
+ *     actively harmful. Offline API calls fail, and the pages handle that -
+ *     the field form queues its entries locally.
+ */
+const VERSION = "utf-v3";
+const SHELL = [
+  "/", "/index.html", "/app.js", "/styles.css",
+  "/field.html", "/field.js",
+  "/logo.png", "/icon-180.png", "/manifest.json", "/field.webmanifest",
+];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(VERSION)
+      // one missing file must not abort the whole install
+      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url))))
+      .then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()));
 });
 
+function offlineFallback(request) {
+  const url = new URL(request.url);
+  if (request.mode === "navigate") {
+    return caches.match(url.pathname.startsWith("/field") ? "/field.html" : "/index.html");
+  }
+  return caches.match(request);
+}
+
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
+  const { request } = event;
+  const url = new URL(request.url);
+
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/")) return;      // always live, never cached
+
   event.respondWith(
-    caches.match(event.request).then((hit) =>
-      hit || fetch(event.request).then((res) => {
-        if (res.ok && SHELL.includes(url.pathname)) {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(event.request, copy));
+    fetch(request)
+      .then((response) => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(VERSION).then((cache) => cache.put(request, copy));
         }
-        return res;
-      }).catch(() => caches.match("/field.html"))));
+        return response;
+      })
+      .catch(() => offlineFallback(request).then((hit) =>
+        hit || new Response("Offline", { status: 503, statusText: "Offline" }))));
+});
+
+/* Background Sync: Chrome/Android can wake the worker once connectivity is
+   back, even if the page was closed. The page still syncs on its own when
+   reopened, so this is an improvement rather than something to depend on -
+   iOS does not implement it. */
+self.addEventListener("sync", (event) => {
+  if (event.tag === "utf-sync") {
+    event.waitUntil(
+      self.clients.matchAll({ includeUncontrolled: true }).then((clients) => {
+        clients.forEach((client) => client.postMessage({ type: "sync-now" }));
+      }));
+  }
 });

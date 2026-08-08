@@ -5,9 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#c1121f">
 <title>Field Booking — Usman Traders</title>
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="/field.webmanifest">
 <link rel="icon" type="image/png" href="/logo.png">
-<link rel="apple-touch-icon" href="/logo.png">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Field Booking">
 <style>
 :root{--brand:#c1121f;--brand-2:#e03131;--ink:#17191c;--ink-2:#454b54;--ink-3:#7b838e;
   --line:#e6e9ee;--bg:#f6f7f9;--surface:#fff;--green:#0b7a45;--green-bg:#e4f6ec;
@@ -80,6 +84,7 @@ textarea{min-height:64px;resize:vertical;}
 .pill{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:20px;white-space:nowrap;}
 .pill.wait{background:var(--amber-bg);color:var(--amber);}
 .pill.done{background:var(--green-bg);color:var(--green);}
+.pill.err{background:#fdecec;color:#c1121f;}
 
 .toast{position:fixed;left:14px;right:14px;bottom:calc(88px + env(safe-area-inset-bottom));
   background:var(--ink);color:#fff;padding:13px 16px;border-radius:11px;font-size:13.5px;
@@ -98,6 +103,11 @@ textarea{min-height:64px;resize:vertical;}
   </div>
   <div class="net" id="net"><span class="dot"></span><span id="net-text">Online</span></div>
 </header>
+
+<div class="bar hidden" id="install-bar" style="background:#e8f1fc;color:#10529c;border-bottom:1px solid #cbe0f7">
+  <span>Install this app on your phone</span>
+  <button id="install-btn" style="border-color:#b8d4f2;color:#10529c">Install</button>
+</div>
 
 <div class="bar hidden" id="pending-bar">
   <span id="pending-text">0 waiting to sync</span>

@@ -152,6 +152,45 @@ master re-seeded and the default admin login.
 
 ---
 
+## Deploying for real use
+
+The app is a PWA: the admin app installs from `/`, the field form from
+`/field.html`, both from the same address.
+
+### HTTPS is required — this is not optional
+
+Browsers only allow service workers and app installation on **HTTPS** (or
+`localhost`). Over plain `http://192.168.x.x:8000` the `serviceWorker` API is
+not even present, so there is **no offline mode and no install button**.
+
+Any of these gives you HTTPS:
+
+| Option | Notes |
+|---|---|
+| **Cloudflare Tunnel** | Free, no fixed IP or port forwarding needed. `cloudflared tunnel --url http://localhost:8000` |
+| **Caddy in front** | Free certificate, one line of config, if you have a domain |
+| **A small VPS** | ~$5/month, run the app behind Caddy or nginx |
+
+### Environment
+
+```bash
+SUPPLYDESK_LOGIN=on                  # default; 'off' removes the login screen
+SUPPLYDESK_SECRET=<long random>      # required if more than one server process
+SUPPLYDESK_FIELD_TOKEN=<code>        # the access code the field phones use
+DATABASE_URL=postgresql://...        # optional; SQLite is used when unset
+```
+
+`GET /api/health` reports storage engine, login mode and token state for uptime
+checks.
+
+### Before handing it to a client
+
+- [ ] Serve over HTTPS
+- [ ] Change the `admin` password
+- [ ] Set `SUPPLYDESK_FIELD_TOKEN` to something private
+- [ ] Set `SUPPLYDESK_SECRET`
+- [ ] Schedule a copy of `supplydesk.db` somewhere off the machine
+
 ## Where it lives
 
 | | |

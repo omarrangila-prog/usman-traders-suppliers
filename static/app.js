@@ -2013,6 +2013,27 @@ const tableWatcher = new MutationObserver(() => labelTableCells());
 tableWatcher.observe(el("content"), { childList: true, subtree: true });
 tableWatcher.observe(el("modal-root"), { childList: true, subtree: true });
 
+// Installable to the home screen. Needs HTTPS (or localhost) - over plain
+// http the browser never fires this and the button stays hidden.
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  el("install-chip").classList.remove("hidden");
+});
+el("install-chip").addEventListener("click", async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  el("install-chip").classList.add("hidden");
+});
+window.addEventListener("appinstalled", () => el("install-chip").classList.add("hidden"));
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* not a secure context */ });
+}
+
 (async function boot() {
   try {
     const me = await api("/me");
