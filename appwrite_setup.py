@@ -132,16 +132,36 @@ def ensure(label, method, path, body, ok_existing=409):
 
 def attribute_path(collection, spec):
     kind = spec.split(":")[0]
-    return {"s": "string", "i": "integer", "d": "double", "b": "boolean"}[kind]
+    return {"s": "string", "i": "integer", "d": "float", "b": "boolean"}[kind]
 
 
 def main():
     if not (PROJECT and API_KEY):
         sys.exit("Set APPWRITE_PROJECT and APPWRITE_KEY first (see the docstring).")
 
+    global DATABASE_ID
     print(f"Appwrite {ENDPOINT}  project {PROJECT}\n")
-    ensure(f"database '{DATABASE_ID}'", "POST", "/databases",
-           {"databaseId": DATABASE_ID, "name": "SupplyDesk"})
+
+    status, payload = call("POST", "/databases",
+                           {"databaseId": DATABASE_ID, "name": "SupplyDesk"})
+    if status in (200, 201):
+        print(f"  created  database '{DATABASE_ID}'")
+    elif status == 409:
+        print(f"  exists   database '{DATABASE_ID}'")
+    else:
+        # Free plans cap how many databases you may have. If one is already
+        # there, use it rather than insisting on our own name.
+        print(f"  note     could not create '{DATABASE_ID}': {payload.get('message', status)}")
+        _, existing = call("GET", "/databases")
+        found = existing.get("databases") or []
+        if not found:
+            sys.exit(
+                "\nNo database exists and one cannot be created on this plan.\n"
+                "Free up a database in another project of the same Appwrite\n"
+                "organisation, or create one in the console, then re-run.\n"
+                "Point at a specific one with APPWRITE_DB=<id>.")
+        DATABASE_ID = found[0]["$id"]
+        print(f"  using    existing database '{DATABASE_ID}' ({found[0]['name']})")
 
     for collection, attributes in SCHEMA.items():
         print(f"\n{collection}")
