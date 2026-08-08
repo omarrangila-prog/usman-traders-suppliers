@@ -8,10 +8,14 @@ import re
 import sqlite3
 import time
 
-# Serverless hosts (Vercel) give you a read-only project directory and a scratch
-# /tmp that is wiped whenever the instance recycles - fine for a demo, not for
-# real records. DEMO_MODE drives the warning banner in the UI.
-DEMO_MODE = bool(os.environ.get("VERCEL"))
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+# A serverless host gives you a read-only project directory and a scratch /tmp
+# that is wiped whenever the instance recycles. That is a demo, and the UI says
+# so. Attach a real database and it stops being one - the warning would then be
+# a lie, and a warning nobody can trust is worse than none.
+DEMO_MODE = bool(os.environ.get("VERCEL")) and not IS_POSTGRES
 
 DB_PATH = os.environ.get("UT_DB") or (
     "/tmp/usmantraders.db" if DEMO_MODE
@@ -228,11 +232,9 @@ CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
 # dialects are absorbed here so no query elsewhere has to know which is in use.
 # --------------------------------------------------------------------------
 
-DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 # Keep our tables in their own schema. A hosted database is often shared with
 # other projects, and "public" is where names collide.
 PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
-IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
