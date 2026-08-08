@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import appwrite_client
 import db
 import xlsx
 
@@ -1245,6 +1246,13 @@ def export_products(ctx):
                    p["purchase_price"], p["sale_price"], p["stock"], p["reorder_level"],
                    "Yes" if p["active"] else "No"] for p in list_products(ctx)]
     return workbook_response([sheet], f"{business} Item Master")
+
+
+@route("GET", r"/api/appwrite/ping")
+def appwrite_ping(ctx):
+    """Called automatically when the app opens, to verify the Appwrite setup."""
+    ctx.require_user()
+    return appwrite_client.client.status()
 
 
 @route("GET", r"/api/backup")

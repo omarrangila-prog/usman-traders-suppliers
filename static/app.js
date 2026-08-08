@@ -1816,6 +1816,59 @@ function applyBranding() {
   }
 }
 
+/**
+ * Pings Appwrite when the app opens to verify the setup, and reports the
+ * result in the sidebar. Runs after the first render so a slow or unreachable
+ * cloud never holds up the app.
+ */
+async function pingAppwrite() {
+  const chip = el("cloud-chip");
+  const label = el("cloud-text");
+  try {
+    const info = await api("/appwrite/ping");
+    state.appwrite = info;
+    if (!info.ok) {
+      chip.className = "cloud-chip bad";
+      label.textContent = "Cloud unreachable";
+    } else if (!info.has_key) {
+      chip.className = "cloud-chip warn";
+      label.textContent = "Cloud: needs API key";
+    } else {
+      chip.className = "cloud-chip ok";
+      label.textContent = `Cloud: ${info.schema}`;
+    }
+    chip.onclick = () => appwriteModal(info);
+  } catch (err) {
+    chip.className = "cloud-chip bad";
+    label.textContent = "Cloud check failed";
+    chip.onclick = () => toast(err.message, "error");
+  }
+}
+
+function appwriteModal(info) {
+  const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:16px;
+    padding:7px 0;border-bottom:1px solid var(--line-2)">
+    <span class="muted">${h(k)}</span><span class="strong mono">${h(v)}</span></div>`;
+  modal({
+    title: "Appwrite connection",
+    body: `
+      ${info.ok
+        ? `<p style="margin-top:0">Connected &mdash; the server replied
+             <strong>${h(info.reply || "Pong!")}</strong>.</p>`
+        : `<div class="form-error">${h(info.error || "Could not reach Appwrite.")}</div>`}
+      ${row("Endpoint", info.endpoint)}
+      ${row("Project", info.project_name || info.project)}
+      ${row("Project ID", info.project)}
+      ${row("Database", info.database)}
+      ${row("API key", info.has_key ? "configured" : "not set")}
+      ${row("Schema", info.schema || "-")}
+      ${info.has_key ? "" : `<p class="muted" style="margin:14px 0 0;font-size:12.5px">
+        Reads and writes need a server API key. Create one in the Appwrite console
+        under <strong>Settings &rarr; API keys</strong>, then start the app with
+        <span class="mono">APPWRITE_KEY=...</span> set.</p>`}`,
+  });
+}
+
 function showLogin() {
   state.user = null;
   el("app").classList.add("hidden");
@@ -1837,6 +1890,7 @@ async function showApp(user) {
   buildNav();
   if (!location.hash) location.hash = "#/dashboard";
   router();
+  pingAppwrite();
 }
 
 el("login-form").addEventListener("submit", async (e) => {
