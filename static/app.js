@@ -1830,6 +1830,8 @@ async function showApp(user) {
   el("user-name").textContent = user.full_name || user.username;
   el("user-role").textContent = user.role === "admin" ? "administrator" : "staff";
   el("user-avatar").textContent = (user.full_name || user.username).charAt(0).toUpperCase();
+  // With sign-in switched off there is nothing to sign out of.
+  el("logout-btn").classList.toggle("hidden", state.company.login_required === false);
   el("login-screen").classList.add("hidden");
   el("app").classList.remove("hidden");
   buildNav();

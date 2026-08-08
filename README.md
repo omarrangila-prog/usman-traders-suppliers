@@ -19,8 +19,18 @@ python3 app.py          # then open http://localhost:8000
 Use a different port by passing it: `python3 app.py 9000`.
 Stop the server with `Ctrl+C`.
 
-**First sign-in:** username `admin`, password `admin123`.
-Change it immediately from *Company Profile → Change my password*.
+**There is no sign-in.** The app opens straight to the dashboard and runs as
+the administrator, so nothing stands between you and the day's work.
+
+To switch the login screen back on:
+
+```bash
+SUPPLYDESK_LOGIN=on python3 app.py     # then sign in as admin / admin123
+```
+
+Leave it off only on a machine you trust, since anyone who can reach the
+address can see and change everything. The accounts, roles and passwords are
+all still there, unused, until you turn it back on.
 
 To let staff use it from other computers on the same shop/office network, they
 open `http://<this-computer-ip>:8000`.

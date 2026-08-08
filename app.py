@@ -24,6 +24,12 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 SESSION_HOURS = db.SESSION_HOURS
 MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 
+# Sign-in is switched off by default: the app opens straight to the dashboard
+# and every request runs as the administrator. Set SUPPLYDESK_LOGIN=on to put
+# the login screen back. Leave it off only where the machine itself is trusted,
+# since anyone who can reach the address can then see and change everything.
+LOGIN_REQUIRED = os.environ.get("SUPPLYDESK_LOGIN", "").lower() in ("1", "on", "true", "yes")
+
 ROUTES = []
 
 
@@ -71,6 +77,14 @@ def text(value, default=""):
 # --------------------------------------------------------------------------
 # Authentication
 # --------------------------------------------------------------------------
+
+def default_user(conn):
+    """Who the app runs as when sign-in is switched off: the first admin."""
+    return (conn.execute(
+        "SELECT * FROM users WHERE active = 1 AND role = 'admin' ORDER BY id LIMIT 1").fetchone()
+        or conn.execute(
+        "SELECT * FROM users WHERE active = 1 ORDER BY id LIMIT 1").fetchone())
+
 
 @route("POST", r"/api/login")
 def login(ctx):
@@ -187,14 +201,15 @@ COMPANY_FIELDS = ["name", "tagline", "logo", "address", "city", "phone",
 def get_branding(ctx):
     """Name, tagline and logo only - readable before sign-in for the login screen."""
     row = ctx.conn.execute("SELECT name, tagline, logo FROM company WHERE id = 1").fetchone()
-    return dict(row, demo=db.DEMO_MODE) if row else {"demo": db.DEMO_MODE}
+    base = {"demo": db.DEMO_MODE, "login_required": LOGIN_REQUIRED}
+    return dict(row, **base) if row else base
 
 
 @route("GET", r"/api/company")
 def get_company(ctx):
     ctx.require_user()
     row = ctx.conn.execute("SELECT * FROM company WHERE id = 1").fetchone()
-    return dict(row, demo=db.DEMO_MODE)
+    return dict(row, demo=db.DEMO_MODE, login_required=LOGIN_REQUIRED)
 
 
 @route("PUT", r"/api/company")
@@ -1299,6 +1314,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(response.data)
 
     def current_session(self, conn):
+        if not LOGIN_REQUIRED:
+            return None, default_user(conn)
         cookie_header = self.headers.get("Cookie")
         if not cookie_header:
             return None, None
