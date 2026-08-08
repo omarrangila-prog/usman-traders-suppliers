@@ -229,6 +229,9 @@ CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
 # --------------------------------------------------------------------------
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+# Keep our tables in their own schema. A hosted database is often shared with
+# other projects, and "public" is where names collide.
+PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
@@ -238,6 +241,7 @@ if IS_POSTGRES:
     import psycopg2
     import psycopg2.extensions
     import psycopg2.extras
+    import psycopg2.pool
 
     # NUMERIC arrives as Decimal, which json.dumps would render as a quoted
     # string and the browser would then refuse to do arithmetic on.
@@ -296,9 +300,10 @@ class Cursor:
 class Connection:
     """Thin wrapper so callers can keep using conn.execute(...) on both engines."""
 
-    def __init__(self, raw, postgres):
+    def __init__(self, raw, postgres, pooled=False):
         self._raw = raw
         self.postgres = postgres
+        self.pooled = pooled
 
     def cursor(self):
         raw = (self._raw.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -322,12 +327,35 @@ class Connection:
         self._raw.rollback()
 
     def close(self):
-        self._raw.close()
+        if self.pooled:
+            # hand it back clean, never mid-transaction
+            try:
+                self._raw.rollback()
+            except Exception:
+                pass
+            pool().putconn(self._raw)
+        else:
+            self._raw.close()
+
+
+_POOL = None
+
+
+def pool():
+    """Reuse connections. A hosted database sits across the network, where
+    opening a fresh TLS connection per request costs more than the query."""
+    global _POOL
+    if _POOL is None:
+        _POOL = psycopg2.pool.ThreadedConnectionPool(
+            1, 8, DATABASE_URL, connect_timeout=15,
+            # applied at connect time, so it costs no extra round trip
+            options=f"-c search_path={PG_SCHEMA},public")
+    return _POOL
 
 
 def connect():
     if IS_POSTGRES:
-        return Connection(psycopg2.connect(DATABASE_URL, connect_timeout=10), True)
+        return Connection(pool().getconn(), True, pooled=True)
     raw = sqlite3.connect(DB_PATH)
     raw.row_factory = sqlite3.Row
     raw.execute("PRAGMA foreign_keys = ON")
@@ -593,6 +621,8 @@ def postgres_schema(sql):
 def init():
     conn = connect()
     if conn.postgres:
+        conn.executescript(f'CREATE SCHEMA IF NOT EXISTS "{PG_SCHEMA}"')
+        conn.executescript(f'SET search_path TO "{PG_SCHEMA}", public')
         conn.executescript(PG_COMPAT)
         conn.executescript(postgres_schema(SCHEMA))
     else:
