@@ -1086,6 +1086,166 @@ def report_inventory(ctx):
 
 
 # --------------------------------------------------------------------------
+# Field entries - offline capture and sync
+# --------------------------------------------------------------------------
+
+@route("GET", r"/api/field/bootstrap")
+def field_bootstrap(ctx):
+    """Everything the phone caches so the form still works with no signal."""
+    return {
+        "company": company_name(ctx.conn),
+        "products": rows(ctx.conn.execute(
+            """SELECT sku, name, unit, sale_price, purchase_price FROM products
+               WHERE active = 1 ORDER BY name""")),
+        "customers": [r["name"] for r in ctx.conn.execute(
+            "SELECT name FROM customers WHERE active = 1 ORDER BY name").fetchall()],
+        "suppliers": [r["name"] for r in ctx.conn.execute(
+            "SELECT name FROM suppliers WHERE active = 1 ORDER BY name").fetchall()],
+        "server_time": now_iso(),
+    }
+
+
+@route("POST", r"/api/field/sync")
+def field_sync(ctx):
+    """Accept a batch queued on a phone. Safe to call repeatedly: an entry
+    already stored is acknowledged rather than inserted again."""
+    entries = ctx.body.get("entries")
+    if not isinstance(entries, list):
+        raise HttpError(400, "Expected a list of entries.")
+    device = text(ctx.body.get("device"))[:64]
+
+    accepted, duplicates = [], []
+    for raw in entries[:200]:
+        client_id = text(raw.get("client_id"))[:64]
+        if not client_id:
+            continue
+        seen = ctx.conn.execute(
+            "SELECT id FROM field_entries WHERE client_id = ?", (client_id,)).fetchone()
+        if seen:
+            duplicates.append(client_id)
+            continue
+        items = raw.get("items") or []
+        total = round(sum(num(i.get("qty")) * num(i.get("price")) for i in items), 2)
+        ctx.conn.execute(
+            """INSERT INTO field_entries (client_id, kind, party_name, phone, city,
+                                          entry_date, notes, items, total, device,
+                                          captured_at, status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'Pending')""",
+            (client_id,
+             "Purchase" if text(raw.get("kind")) == "Purchase" else "Booking",
+             text(raw.get("party_name"))[:200], text(raw.get("phone"))[:40],
+             text(raw.get("city"))[:80], text(raw.get("entry_date"), today()) or today(),
+             text(raw.get("notes"))[:1000], json.dumps(items), total, device,
+             text(raw.get("captured_at"))))
+        accepted.append(client_id)
+    ctx.conn.commit()
+    return {"accepted": accepted, "duplicates": duplicates,
+            "stored": len(accepted), "server_time": now_iso()}
+
+
+@route("GET", r"/api/field/entries")
+def list_field_entries(ctx):
+    ctx.require_user()
+    where, params = ["1=1"], []
+    if ctx.query.get("status"):
+        where.append("status = ?")
+        params.append(ctx.query["status"])
+    entries = rows(ctx.conn.execute(
+        f"""SELECT * FROM field_entries WHERE {' AND '.join(where)}
+            ORDER BY id DESC LIMIT 300""", params))
+    for entry in entries:
+        try:
+            entry["items"] = json.loads(entry["items"] or "[]")
+        except ValueError:
+            entry["items"] = []
+    return entries
+
+
+@route("POST", r"/api/field/entries/(\d+)/convert")
+def convert_field_entry(ctx, entry_id):
+    """Turn a reviewed field entry into a real order or purchase."""
+    ctx.require_user()
+    entry = ctx.conn.execute(
+        "SELECT * FROM field_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not entry:
+        raise HttpError(404, "Entry not found.")
+    if entry["status"] != "Pending":
+        raise HttpError(400, f"This entry is already {entry['status'].lower()}.")
+
+    items = []
+    for line in json.loads(entry["items"] or "[]"):
+        product = ctx.conn.execute(
+            "SELECT id FROM products WHERE sku = ?", (text(line.get("sku")),)).fetchone()
+        if not product:
+            raise HttpError(400, f"No product matches code {line.get('sku')!r}. "
+                                 "Add it first, then convert.")
+        qty, price = num(line.get("qty")), num(line.get("price"))
+        items.append({"product_id": product["id"], "qty": qty, "price": price,
+                      "line_total": round(qty * price, 2)})
+    if not items:
+        raise HttpError(400, "This entry has no items to convert.")
+
+    party_table = "suppliers" if entry["kind"] == "Purchase" else "customers"
+    party = ctx.conn.execute(
+        f"SELECT id FROM {party_table} WHERE name = ?", (entry["party_name"],)).fetchone()
+    if party:
+        party_id = party["id"]
+    else:
+        cur = ctx.conn.execute(
+            f"INSERT INTO {party_table} (name, phone, city) VALUES (?,?,?)",
+            (entry["party_name"] or "Unnamed", entry["phone"], entry["city"]))
+        party_id = cur.lastrowid
+
+    subtotal = round(sum(i["line_total"] for i in items), 2)
+    note = f"From field entry {entry['client_id'][:8]}. {entry['notes']}".strip()
+
+    if entry["kind"] == "Purchase":
+        number = db.next_number(ctx.conn, "purchases", "purchase_no", "PUR")
+        cur = ctx.conn.execute(
+            """INSERT INTO purchases (purchase_no, supplier_id, purchase_date, subtotal,
+                                      total, status, notes)
+               VALUES (?,?,?,?,?, 'Ordered', ?)""",
+            (number, party_id, entry["entry_date"], subtotal, subtotal, note))
+        new_id = cur.lastrowid
+        for item in items:
+            ctx.conn.execute(
+                """INSERT INTO purchase_items (purchase_id, product_id, qty, price, line_total)
+                   VALUES (?,?,?,?,?)""",
+                (new_id, item["product_id"], item["qty"], item["price"], item["line_total"]))
+        target = "purchases"
+    else:
+        number = db.next_number(ctx.conn, "orders", "order_no", "ORD")
+        cur = ctx.conn.execute(
+            """INSERT INTO orders (order_no, customer_id, order_date, status,
+                                   delivery_status, notes, subtotal, total)
+               VALUES (?,?,?, 'Pending', 'Not Dispatched', ?,?,?)""",
+            (number, party_id, entry["entry_date"], note, subtotal, subtotal))
+        new_id = cur.lastrowid
+        for item in items:
+            ctx.conn.execute(
+                """INSERT INTO order_items (order_id, product_id, qty, price, line_total)
+                   VALUES (?,?,?,?,?)""",
+                (new_id, item["product_id"], item["qty"], item["price"], item["line_total"]))
+        target = "orders"
+
+    ctx.conn.execute(
+        "UPDATE field_entries SET status = 'Converted', linked_id = ?, linked_no = ? WHERE id = ?",
+        (new_id, number, entry_id))
+    ctx.conn.commit()
+    return {"ok": True, "target": target, "id": new_id, "number": number}
+
+
+@route("POST", r"/api/field/entries/(\d+)/reject")
+def reject_field_entry(ctx, entry_id):
+    ctx.require_user()
+    ctx.conn.execute(
+        "UPDATE field_entries SET status = 'Rejected' WHERE id = ? AND status = 'Pending'",
+        (entry_id,))
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------
 # Excel exports
 # --------------------------------------------------------------------------
 

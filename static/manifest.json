@@ -1,0 +1,14 @@
+{
+  "name": "Usman Traders — Field Booking",
+  "short_name": "Field Booking",
+  "start_url": "/field.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#c1121f",
+  "theme_color": "#c1121f",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/logo.png", "sizes": "448x448", "type": "image/png", "purpose": "any" },
+    { "src": "/logo-large.png", "sizes": "900x900", "type": "image/png", "purpose": "any" }
+  ]
+}

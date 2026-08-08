@@ -287,6 +287,7 @@ const ROUTES = [
   { path: "orders", title: "Orders", icon: "▤", group: "Sales", view: viewOrders },
   { path: "deliveries", title: "Deliveries", icon: "▶", group: "Sales", view: viewDeliveries },
   { path: "invoices", title: "Invoices", icon: "₨", group: "Sales", view: viewInvoices },
+  { path: "field", title: "Field Entries", icon: "◎", group: "Sales", view: viewFieldEntries },
   { path: "purchases", title: "Purchases", icon: "▼", group: "Buying", view: viewPurchases },
   { path: "suppliers", title: "Suppliers", icon: "◉", group: "Buying", view: viewSuppliers },
   { path: "products", title: "Products", icon: "◧", group: "Catalogue", view: viewProducts },
@@ -671,6 +672,80 @@ function deliveryModal(order, onDone) {
       onDone();
     },
   });
+}
+
+// ------------------------------------------------------------ field entries
+
+async function viewFieldEntries() {
+  const entries = await api("/field/entries");
+  const pending = entries.filter((e) => e.status === "Pending");
+  setBadge("field", pending.length);
+
+  pageAction("Open Field Form", () => window.open("/field.html", "_blank"), "btn");
+
+  const card = (e) => `
+    <tr>
+      <td>
+        <span class="strong">${h(e.party_name)}</span>
+        <div class="muted">${h(e.city) || "-"}${e.phone ? " &middot; " + h(e.phone) : ""}</div>
+      </td>
+      <td>${statusBadge(e.kind === "Purchase" ? "Ordered" : "Pending").replace(
+             e.kind === "Purchase" ? "Ordered" : "Pending", h(e.kind))}</td>
+      <td>${fmtDate(e.entry_date)}<div class="muted">by ${h(e.device) || "field"}</div></td>
+      <td>${e.items.map((i) => `${h(i.sku)} &times; ${qty(i.qty)}`).join("<br>") || "-"}</td>
+      <td class="num strong">${money(e.total)}</td>
+      <td>${e.status === "Converted"
+            ? `<span class="badge green">${h(e.linked_no)}</span>`
+            : e.status === "Rejected"
+              ? `<span class="badge grey">Rejected</span>`
+              : `<span class="badge amber">Pending</span>`}</td>
+      <td class="row-actions">${e.status === "Pending"
+        ? `<button class="btn btn-sm btn-primary" data-convert="${e.id}">Accept</button>
+           <button class="btn btn-sm btn-danger" data-reject="${e.id}">Reject</button>`
+        : ""}</td>
+    </tr>`;
+
+  el("content").innerHTML = `
+    <div class="stat-grid">
+      <div class="stat amber"><div class="label">Waiting for review</div>
+        <div class="value">${pending.length}</div>
+        <div class="sub">Sent in from the field</div></div>
+      <div class="stat green"><div class="label">Accepted</div>
+        <div class="value">${entries.filter((e) => e.status === "Converted").length}</div>
+        <div class="sub">Turned into orders or purchases</div></div>
+      <div class="stat blue"><div class="label">Value waiting</div>
+        <div class="value">${cur(pending.reduce((s, e) => s + Number(e.total), 0))}</div></div>
+    </div>
+
+    <div class="card"><div class="card-body">
+      <p style="margin:0" class="muted">Your buyer opens
+        <strong>/field.html</strong> on their phone. It works with no signal &mdash; entries are
+        held on the device and appear here automatically once they are back in range.</p>
+    </div></div>
+
+    ${tableCard(`<th>Shop / party</th><th>Type</th><th>Date</th><th>Items</th>
+       <th class="num">Total</th><th>Status</th><th></th>`,
+      entries.length ? entries.map(card).join("") : null,
+      emptyState("◎", "Nothing from the field yet",
+        "Entries saved on a phone appear here as soon as it reconnects.",
+        `<button class="btn btn-primary" onclick="window.open('/field.html','_blank')">Open the field form</button>`))}`;
+
+  document.querySelectorAll("[data-convert]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      const result = await api(`/field/entries/${b.dataset.convert}/convert`, { method: "POST" });
+      toast(`Accepted as ${result.number}.`, "success");
+      state.products = [];
+      viewFieldEntries();
+    } catch (err) { toast(err.message, "error"); b.disabled = false; }
+  }));
+  document.querySelectorAll("[data-reject]").forEach((b) => b.addEventListener("click", () => {
+    confirmDialog("Reject this field entry?", async () => {
+      await api(`/field/entries/${b.dataset.reject}/reject`, { method: "POST" });
+      toast("Entry rejected.", "success");
+      viewFieldEntries();
+    }, "Reject");
+  }));
 }
 
 // -------------------------------------------------------------- deliveries
