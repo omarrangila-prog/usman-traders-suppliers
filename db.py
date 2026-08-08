@@ -471,9 +471,21 @@ PLACEHOLDER_LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 </svg>"""
 
 
+LOGO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
+
+
 def placeholder_logo():
     encoded = base64.b64encode(PLACEHOLDER_LOGO_SVG.encode()).decode()
     return f"data:image/svg+xml;base64,{encoded}"
+
+
+def default_logo():
+    """The company mark, inlined so it travels with the database."""
+    try:
+        with open(LOGO_FILE, "rb") as handle:
+            return "data:image/png;base64," + base64.b64encode(handle.read()).decode()
+    except OSError:
+        return placeholder_logo()
 
 
 def seed(conn):
@@ -489,8 +501,14 @@ def seed(conn):
                        'عثمان ٹریڈرز اینڈ سپلائرز  |  Achar • Masala • Food Items',
                        ?, '', 'Karachi', '', '', 'PKR', 0,
                        'Thank you for your business.')""",
-            (placeholder_logo(),),
+            (default_logo(),),
         )
+    else:
+        # Installations seeded before the real mark existed still carry the
+        # stand-in SVG. Replace that, but never a logo the business uploaded.
+        current = cur.execute("SELECT logo FROM company WHERE id = 1").fetchone()
+        if current and (not current["logo"] or current["logo"].startswith("data:image/svg+xml")):
+            cur.execute("UPDATE company SET logo = ? WHERE id = 1", (default_logo(),))
 
     cur.execute("SELECT COUNT(*) c FROM users")
     if cur.fetchone()["c"] == 0:

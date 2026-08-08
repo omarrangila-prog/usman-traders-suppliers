@@ -52,9 +52,14 @@ open `http://<this-computer-ip>:8000`.
 
 ### The logo
 
-A stand-in "UT" mark in your brand colours is in place. To use your real logo:
-**Company Profile → Upload logo**, pick the image file, then **Save Company
-Profile**. It then appears on the sidebar, the sign-in screen and every invoice.
+Your company mark — the cream disc with **عثمان** in red Nastaliq over
+**ٹریڈرز اینڈ سپلائرز** — is built in (`static/logo.png`) and appears on the
+sidebar, the browser tab and every invoice.
+
+It is a rebuild of the artwork you supplied, not the original file. To drop in
+your exact artwork: **Company Profile → Upload logo**, choose the image, then
+**Save Company Profile**. That replaces it everywhere and is never overwritten
+by updates.
 
 ---
 
