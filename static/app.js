@@ -1874,7 +1874,7 @@ function userModal(user) {
 
 function applyBranding() {
   const company = state.company;
-  document.title = company.name || "SupplyDesk";
+  document.title = company.name || "Business Management System";
   if (company.demo) {
     el("demo-banner").classList.remove("hidden");
     el("login-demo-banner").classList.remove("hidden");
