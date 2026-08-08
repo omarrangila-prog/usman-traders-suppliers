@@ -41,7 +41,15 @@ async function api(path, options) {
   let data = {};
   try { data = await res.json(); } catch (_) { /* empty body */ }
   if (res.status === 401 && state.user) { showLogin(); throw new Error("Session expired. Please sign in again."); }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    if (res.status === 409 && (data.error || "").includes("|IMPACT|")) {
+      const [message, detail] = data.error.split("|IMPACT|");
+      err.message = message.trim();
+      try { err.impact = JSON.parse(detail); } catch (_) { /* no detail */ }
+    }
+    throw err;
+  }
   return data;
 }
 
@@ -101,6 +109,37 @@ function modal({ title, body, submitLabel, onSubmit, wide, footer }) {
   const first = $("input:not([type=hidden]), select, textarea", form);
   if (first) first.focus();
   return form;
+}
+
+/**
+ * Delete that explains itself. If the server refuses because other records
+ * depend on this one, show exactly what would go and offer to proceed.
+ */
+async function deleteWithCascade(path, label, onDone) {
+  try {
+    await api(path, { method: "DELETE" });
+    toast(label + " deleted.", "success");
+    onDone();
+  } catch (err) {
+    if (!err.impact) { toast(err.message, "error"); return; }
+    const lines = Object.entries(err.impact)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<li><strong>${h(v)}</strong> ${h(k.replace(/_/g, " "))}</li>`)
+      .join("");
+    modal({
+      title: "Delete " + label + "?",
+      body: `<p style="margin-top:0">${h(err.message)} Deleting it will also remove:</p>
+        <ul style="margin:10px 0 0;padding-left:20px;line-height:1.8">${lines}</ul>
+        <p class="muted" style="margin:14px 0 0;font-size:12.5px">
+          Any stock those documents moved is put back. This cannot be undone.</p>`,
+      submitLabel: "Delete everything listed",
+      onSubmit: async () => {
+        await api(path + (path.includes("?") ? "&" : "?") + "cascade=1", { method: "DELETE" });
+        toast(label + " and related records deleted.", "success");
+        onDone();
+      },
+    });
+  }
 }
 
 function confirmDialog(message, onYes, danger) {
@@ -632,19 +671,15 @@ async function orderDetail(orderId) {
       <button class="btn" onclick="location.hash='#/orders'">&larr; Back to orders</button>
       ${invoice ? `<button class="btn" onclick="location.hash='#/invoices/${invoice.id}'">View invoice</button>` : ""}
       <span style="flex:1"></span>
-      ${invoice ? "" : `<button class="btn btn-danger" id="del-order">Delete order</button>`}
+      <button class="btn btn-danger" id="del-order">Delete order</button>
     </div>`;
 
-  const deleteButton = $("#del-order");
-  if (deleteButton) {
-    deleteButton.addEventListener("click", () => confirmDialog(
-      `Delete order ${order.order_no}? Any stock it moved will be returned.`,
-      async () => {
-        await api("/orders/" + orderId, { method: "DELETE" });
-        toast("Order deleted.", "success");
-        go("orders");
-      }, "Delete order"));
-  }
+  $("#del-order").addEventListener("click", () => confirmDialog(
+    `Delete order ${order.order_no}? Any stock it moved will be returned.`,
+    async () => {
+      closeModal();
+      deleteWithCascade("/orders/" + orderId, "Order", () => go("orders"));
+    }, "Delete order"));
 }
 
 function deliveryModal(order, onDone) {
@@ -701,8 +736,8 @@ async function viewFieldEntries() {
               : `<span class="badge amber">Pending</span>`}</td>
       <td class="row-actions">${e.status === "Pending"
         ? `<button class="btn btn-sm btn-primary" data-convert="${e.id}">Accept</button>
-           <button class="btn btn-sm btn-danger" data-reject="${e.id}">Reject</button>`
-        : ""}</td>
+           <button class="btn btn-sm" data-reject="${e.id}">Reject</button>` : ""}
+        <button class="btn btn-sm btn-danger" data-delentry="${e.id}">Delete</button></td>
     </tr>`;
 
   el("content").innerHTML = `
@@ -738,6 +773,13 @@ async function viewFieldEntries() {
       state.products = [];
       viewFieldEntries();
     } catch (err) { toast(err.message, "error"); b.disabled = false; }
+  }));
+  document.querySelectorAll("[data-delentry]").forEach((b) => b.addEventListener("click", () => {
+    confirmDialog("Delete this field entry permanently?", async () => {
+      await api(`/field/entries/${b.dataset.delentry}`, { method: "DELETE" });
+      toast("Entry deleted.", "success");
+      viewFieldEntries();
+    }, "Delete entry");
   }));
   document.querySelectorAll("[data-reject]").forEach((b) => b.addEventListener("click", () => {
     confirmDialog("Reject this field entry?", async () => {
@@ -930,7 +972,7 @@ async function invoiceDetail(invoiceId) {
       <button class="btn" onclick="location.hash='#/invoices'">&larr; Back to invoices</button>
       ${invoice.order_id ? `<button class="btn" onclick="location.hash='#/orders/${invoice.order_id}'">View order</button>` : ""}
       <span style="flex:1"></span>
-      ${state.user.role === "admin" ? `<button class="btn btn-danger" id="del-inv">Delete invoice</button>` : ""}
+      <button class="btn btn-danger" id="del-inv">Delete invoice</button>
     </div>`;
 
   const deleteButton = $("#del-inv");
@@ -1239,11 +1281,12 @@ async function viewProducts() {
       () => productModal(state.products.find((p) => String(p.id) === b.dataset.edit))));
     document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
       const product = state.products.find((p) => String(p.id) === b.dataset.del);
-      confirmDialog(`Delete "${product.name}"? This cannot be undone.`, async () => {
-        await api("/products/" + product.id, { method: "DELETE" });
-        toast("Product deleted.", "success");
-        viewProducts();
-      }, "Delete product");
+      confirmDialog(`Delete "${product.name}"?`, async () => {
+        closeModal();
+        deleteWithCascade("/products/" + product.id, "Item", () => {
+          state.products = []; viewProducts();
+        });
+      }, "Delete item");
     }));
   }
 
@@ -1471,9 +1514,8 @@ function partyView(kind) {
       document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
         const party = list.find((p) => String(p.id) === b.dataset.del);
         confirmDialog(`Delete "${party.name}"?`, async () => {
-          await api(`/${kind}/${party.id}`, { method: "DELETE" });
-          toast(label + " deleted.", "success");
-          partyView(kind)();
+          closeModal();
+          deleteWithCascade(`/${kind}/${party.id}`, label, () => partyView(kind)());
         }, "Delete " + label.toLowerCase());
       }));
     }
@@ -1751,9 +1793,57 @@ async function viewCompany() {
             ? `<button class="btn btn-primary" id="backup-btn">⤓ Download backup now</button>`
             : `<p class="muted">Only an administrator can download the backup.</p>`}
         </div></div>
-    </div>`;
+    </div>
+
+    ${state.user.role === "admin" ? `
+    <div class="card" style="border-color:#f0c8c8">
+      <div class="card-head" style="background:var(--brand-tint)">
+        <h2 style="color:var(--brand)">Danger zone</h2></div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0">Bulk deletion. Take a backup first &mdash;
+          there is no undo.</p>
+        <div class="toolbar" style="margin:0">
+          <button class="btn btn-danger" id="clear-tx">Delete all transactions</button>
+          <button class="btn btn-danger" id="clear-all">Delete everything</button>
+          <button class="btn btn-danger" id="clear-stock">Clear stock history</button>
+        </div>
+        <p class="muted" style="margin:12px 0 0;font-size:12.5px">
+          <strong>All transactions</strong> removes orders, invoices, purchases, field entries
+          and stock movements, keeping your items and contacts.
+          <strong>Everything</strong> also removes items, customers and suppliers, then puts the
+          64-item master back so the app stays usable.</p>
+      </div></div>` : ""}`;
 
   $("#logo-btn").addEventListener("click", () => $("#logo-file").click());
+  const danger = (id, scope, title, blurb) => {
+    const button = $("#" + id);
+    if (!button) return;
+    button.addEventListener("click", () => modal({
+      title,
+      body: `<div class="form-error">${h(blurb)} This cannot be undone.</div>
+        <label class="field">Type <strong>DELETE</strong> to confirm
+          <input name="confirm" autocomplete="off" placeholder="DELETE"></label>`,
+      submitLabel: title,
+      onSubmit: async (form) => {
+        const values = formValues(form);
+        if (scope === "stock") {
+          if (values.confirm !== "DELETE") throw new Error("Type DELETE to confirm.");
+          await api("/stock/moves", { method: "DELETE" });
+        } else {
+          await api("/danger/clear", { method: "POST", body: { scope, confirm: values.confirm } });
+        }
+        toast("Deleted.", "success");
+        state.products = [];
+        viewCompany();
+      },
+    }));
+  };
+  danger("clear-tx", "transactions", "Delete all transactions",
+         "Removes every order, invoice, purchase, field entry and stock movement.");
+  danger("clear-all", "everything", "Delete everything",
+         "Removes all transactions plus every item, customer and supplier.");
+  danger("clear-stock", "stock", "Clear stock history",
+         "Removes the movement ledger and sets every item's stock to zero.");
   $("#logo-file").addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;

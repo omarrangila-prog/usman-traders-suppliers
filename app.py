@@ -309,17 +309,33 @@ def update_product(ctx, product_id):
 @route("DELETE", r"/api/products/(\d+)")
 def delete_product(ctx, product_id):
     ctx.require_user()
-    used = ctx.conn.execute(
-        """SELECT (SELECT COUNT(*) FROM order_items WHERE product_id = ?)
-                + (SELECT COUNT(*) FROM invoice_items WHERE product_id = ?)
-                + (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?) AS c""",
-        (product_id, product_id, product_id)).fetchone()["c"]
+    counts = dict(ctx.conn.execute(
+        """SELECT (SELECT COUNT(*) FROM order_items WHERE product_id = ?)    AS order_lines,
+                  (SELECT COUNT(*) FROM invoice_items WHERE product_id = ?)  AS invoice_lines,
+                  (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?) AS purchase_lines,
+                  (SELECT COUNT(*) FROM stock_moves WHERE product_id = ?)    AS movements""",
+        (product_id,) * 4).fetchone())
+    used = sum(counts.values())
+    if used and not wants_cascade(ctx):
+        blocked("This item appears on saved documents.", counts)
     if used:
-        raise HttpError(400, "This product appears on orders, invoices or purchases. "
-                             "Mark it inactive instead of deleting it.")
+        # Reverse the documents first so stock and totals never go stale.
+        for table, column in (("order_items", "order_id"), ("invoice_items", "invoice_id"),
+                              ("purchase_items", "purchase_id")):
+            ids = [r[column] for r in ctx.conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} WHERE product_id = ?",
+                (product_id,)).fetchall()]
+            for doc_id in ids:
+                if table == "order_items":
+                    purge_order(ctx.conn, doc_id)
+                elif table == "invoice_items":
+                    purge_invoice(ctx.conn, doc_id)
+                else:
+                    purge_purchase(ctx.conn, doc_id)
+        ctx.conn.execute("DELETE FROM stock_moves WHERE product_id = ?", (product_id,))
     ctx.conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     ctx.conn.commit()
-    return {"ok": True}
+    return {"ok": True, "removed": counts}
 
 
 # --------------------------------------------------------------------------
@@ -378,15 +394,23 @@ def update_customer(ctx, customer_id):
 @route("DELETE", r"/api/customers/(\d+)")
 def delete_customer(ctx, customer_id):
     ctx.require_user()
-    used = ctx.conn.execute(
-        """SELECT (SELECT COUNT(*) FROM orders WHERE customer_id = ?)
-                + (SELECT COUNT(*) FROM invoices WHERE customer_id = ?) AS c""",
-        (customer_id, customer_id)).fetchone()["c"]
-    if used:
-        raise HttpError(400, "This customer has orders or invoices. Mark them inactive instead.")
+    counts = dict(ctx.conn.execute(
+        """SELECT (SELECT COUNT(*) FROM orders WHERE customer_id = ?)   AS orders,
+                  (SELECT COUNT(*) FROM invoices WHERE customer_id = ?) AS invoices""",
+        (customer_id, customer_id)).fetchone())
+    if sum(counts.values()) and not wants_cascade(ctx):
+        blocked("This customer has saved documents.", counts)
+    for row in ctx.conn.execute(
+            "SELECT id FROM invoices WHERE customer_id = ? AND order_id IS NULL",
+            (customer_id,)).fetchall():
+        purge_invoice(ctx.conn, row["id"])
+    for row in ctx.conn.execute(
+            "SELECT id FROM orders WHERE customer_id = ?", (customer_id,)).fetchall():
+        purge_order(ctx.conn, row["id"])
+    ctx.conn.execute("DELETE FROM invoices WHERE customer_id = ?", (customer_id,))
     ctx.conn.execute("DELETE FROM customers WHERE id = ?", (customer_id,))
     ctx.conn.commit()
-    return {"ok": True}
+    return {"ok": True, "removed": counts}
 
 
 @route("GET", r"/api/customers/(\d+)/ledger")
@@ -422,16 +446,19 @@ def update_supplier(ctx, supplier_id):
 @route("DELETE", r"/api/suppliers/(\d+)")
 def delete_supplier(ctx, supplier_id):
     ctx.require_user()
-    used = ctx.conn.execute(
-        """SELECT (SELECT COUNT(*) FROM purchases WHERE supplier_id = ?)
-                + (SELECT COUNT(*) FROM products WHERE supplier_id = ?) AS c""",
-        (supplier_id, supplier_id)).fetchone()["c"]
-    if used:
-        raise HttpError(400, "This supplier is linked to purchases or products. "
-                             "Mark them inactive instead.")
+    counts = dict(ctx.conn.execute(
+        """SELECT (SELECT COUNT(*) FROM purchases WHERE supplier_id = ?) AS purchases,
+                  (SELECT COUNT(*) FROM products WHERE supplier_id = ?)  AS linked_items""",
+        (supplier_id, supplier_id)).fetchone())
+    if sum(counts.values()) and not wants_cascade(ctx):
+        blocked("This supplier has saved documents.", counts)
+    for row in ctx.conn.execute(
+            "SELECT id FROM purchases WHERE supplier_id = ?", (supplier_id,)).fetchall():
+        purge_purchase(ctx.conn, row["id"])
+    ctx.conn.execute("UPDATE products SET supplier_id = NULL WHERE supplier_id = ?", (supplier_id,))
     ctx.conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
     ctx.conn.commit()
-    return {"ok": True}
+    return {"ok": True, "removed": counts}
 
 
 # --------------------------------------------------------------------------
@@ -635,11 +662,11 @@ def delete_order(ctx, order_id):
     order = ctx.conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
     if not order:
         raise HttpError(404, "Order not found.")
-    if ctx.conn.execute("SELECT 1 FROM invoices WHERE order_id = ?", (order_id,)).fetchone():
-        raise HttpError(400, "Delete the invoice for this order first.")
-    if order["stock_applied"]:
-        apply_order_stock(ctx.conn, order_id, +1)
-    ctx.conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+    invoice = ctx.conn.execute(
+        "SELECT invoice_no FROM invoices WHERE order_id = ?", (order_id,)).fetchone()
+    if invoice and not wants_cascade(ctx):
+        blocked("This order has been invoiced.", {"invoice": invoice["invoice_no"]})
+    purge_order(ctx.conn, order_id)
     ctx.conn.commit()
     return {"ok": True}
 
@@ -778,16 +805,10 @@ def record_payment(ctx, invoice_id):
 
 @route("DELETE", r"/api/invoices/(\d+)")
 def delete_invoice(ctx, invoice_id):
-    ctx.require_admin()
-    invoice = ctx.conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
-    if not invoice:
+    ctx.require_user()
+    if not ctx.conn.execute("SELECT 1 FROM invoices WHERE id = ?", (invoice_id,)).fetchone():
         raise HttpError(404, "Invoice not found.")
-    if invoice["order_id"] is None:
-        for item in ctx.conn.execute(
-                "SELECT * FROM invoice_items WHERE invoice_id = ?", (invoice_id,)).fetchall():
-            log_move(ctx.conn, item["product_id"], "Sale Return", item["qty"],
-                     invoice["invoice_no"], "Invoice deleted")
-    ctx.conn.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
+    purge_invoice(ctx.conn, invoice_id)
     ctx.conn.commit()
     return {"ok": True}
 
@@ -911,12 +932,9 @@ def pay_purchase(ctx, purchase_id):
 @route("DELETE", r"/api/purchases/(\d+)")
 def delete_purchase(ctx, purchase_id):
     ctx.require_user()
-    purchase = ctx.conn.execute("SELECT * FROM purchases WHERE id = ?", (purchase_id,)).fetchone()
-    if not purchase:
+    if not ctx.conn.execute("SELECT 1 FROM purchases WHERE id = ?", (purchase_id,)).fetchone():
         raise HttpError(404, "Purchase not found.")
-    if purchase["stock_applied"]:
-        apply_purchase_stock(ctx.conn, purchase_id, -1)
-    ctx.conn.execute("DELETE FROM purchases WHERE id = ?", (purchase_id,))
+    purge_purchase(ctx.conn, purchase_id)
     ctx.conn.commit()
     return {"ok": True}
 
@@ -1095,6 +1113,58 @@ def report_inventory(ctx):
                FROM products WHERE active = 1 GROUP BY category ORDER BY cost_value DESC""")),
         "items": stock_overview(ctx),
     }
+
+
+
+# --------------------------------------------------------------------------
+# Deletion
+#
+# Anything can be removed, but never silently: a delete that would take other
+# records with it is refused until the caller passes cascade=1, and the refusal
+# says exactly what would go. Stock is unwound first so inventory stays true.
+# --------------------------------------------------------------------------
+
+def wants_cascade(ctx):
+    return str(ctx.query.get("cascade", "")).lower() in ("1", "true", "yes")
+
+
+def blocked(message, impact):
+    raise HttpError(409, message + " |IMPACT| " + json.dumps(impact))
+
+
+def purge_order(conn, order_id):
+    """Remove an order, its invoice, and give back any stock it moved."""
+    order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    if not order:
+        return
+    if order["stock_applied"]:
+        apply_order_stock(conn, order_id, +1)
+    for invoice in conn.execute(
+            "SELECT id FROM invoices WHERE order_id = ?", (order_id,)).fetchall():
+        conn.execute("DELETE FROM invoices WHERE id = ?", (invoice["id"],))
+    conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+
+
+def purge_invoice(conn, invoice_id):
+    invoice = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not invoice:
+        return
+    if invoice["order_id"] is None:      # a direct sale moved stock on its own
+        for item in conn.execute(
+                "SELECT * FROM invoice_items WHERE invoice_id = ?", (invoice_id,)).fetchall():
+            log_move(conn, item["product_id"], "Sale Return", item["qty"],
+                     invoice["invoice_no"], "Invoice deleted")
+    conn.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
+
+
+def purge_purchase(conn, purchase_id):
+    purchase = conn.execute(
+        "SELECT * FROM purchases WHERE id = ?", (purchase_id,)).fetchone()
+    if not purchase:
+        return
+    if purchase["stock_applied"]:
+        apply_purchase_stock(conn, purchase_id, -1)
+    conn.execute("DELETE FROM purchases WHERE id = ?", (purchase_id,))
 
 
 # --------------------------------------------------------------------------
@@ -1420,6 +1490,57 @@ def export_products(ctx):
                    p["purchase_price"], p["sale_price"], p["stock"], p["reorder_level"],
                    "Yes" if p["active"] else "No"] for p in list_products(ctx)]
     return workbook_response([sheet], f"{business} Item Master")
+
+
+@route("DELETE", r"/api/field/entries/(\\d+)")
+def delete_field_entry(ctx, entry_id):
+    ctx.require_user()
+    ctx.conn.execute("DELETE FROM field_entries WHERE id = ?", (entry_id,))
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+@route("DELETE", r"/api/stock/moves")
+def clear_stock_history(ctx):
+    """Wipe the movement ledger and zero every item's stock."""
+    ctx.require_admin()
+    ctx.conn.execute("DELETE FROM stock_moves")
+    ctx.conn.execute("UPDATE products SET stock = 0")
+    ctx.conn.execute("UPDATE orders SET stock_applied = 0")
+    ctx.conn.execute("UPDATE purchases SET stock_applied = 0")
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+TRANSACTION_TABLES = ["invoice_items", "invoices", "order_items", "orders",
+                      "purchase_items", "purchases", "stock_moves", "field_entries"]
+
+
+@route("POST", r"/api/danger/clear")
+def clear_data(ctx):
+    """Bulk delete. scope=transactions keeps the catalogue and contacts;
+    scope=everything also removes items, customers and suppliers."""
+    ctx.require_admin()
+    scope = text(ctx.body.get("scope"))
+    if scope not in ("transactions", "everything"):
+        raise HttpError(400, "scope must be 'transactions' or 'everything'.")
+    if text(ctx.body.get("confirm")) != "DELETE":
+        raise HttpError(400, "Type DELETE to confirm.")
+
+    removed = {}
+    tables = list(TRANSACTION_TABLES)
+    if scope == "everything":
+        tables += ["products", "customers", "suppliers"]
+    for table in tables:
+        removed[table] = ctx.conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
+        ctx.conn.execute(f"DELETE FROM {table}")
+    if scope == "transactions":
+        ctx.conn.execute("UPDATE products SET stock = 0")
+    ctx.conn.commit()
+
+    if scope == "everything":
+        db.seed(ctx.conn)          # put the item master back so the app stays usable
+    return {"ok": True, "scope": scope, "removed": removed}
 
 
 @route("GET", r"/api/appwrite/ping")
