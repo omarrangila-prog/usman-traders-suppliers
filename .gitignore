@@ -7,3 +7,7 @@ __pycache__/
 .vercel
 .DS_Store
 static/__probe.html
+
+# Appwrite / database credentials - never commit
+.env
+appwrite.env
