@@ -659,11 +659,14 @@ def seed(conn):
         if current and (not current["logo"] or current["logo"].startswith("data:image/svg+xml")):
             cur.execute("UPDATE company SET logo = ? WHERE id = 1", (default_logo(),))
 
-    cur.execute("SELECT COUNT(*) c FROM accounts")
-    if cur.fetchone()["c"] == 0:
+    # Insert per account rather than only when the table is empty, so accounts
+    # added in a later version reach databases that already exist.
+    have = {r["code"] for r in cur.execute("SELECT code FROM accounts").fetchall()}
+    missing = [a for a in CHART if a[0] not in have]
+    if missing:
         cur.executemany(
             """INSERT INTO accounts (code, name, type, subtype, is_cash, system)
-               VALUES (?,?,?,?,?,?)""", CHART)
+               VALUES (?,?,?,?,?,?)""", missing)
 
     cur.execute("SELECT COUNT(*) c FROM users")
     if cur.fetchone()["c"] == 0:
