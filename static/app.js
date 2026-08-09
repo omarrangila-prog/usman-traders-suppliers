@@ -37,7 +37,15 @@ function monthStart() { return today().slice(0, 8) + "01"; }
 async function api(path, options) {
   const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
   if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
-  const res = await fetch("/api" + path, opts);
+  let res;
+  try {
+    res = await fetch("/api" + path, opts);
+  } catch (networkError) {
+    // fetch only rejects when the request never reached a server
+    const offline = new Error("No connection to the office.");
+    offline.offline = true;
+    throw offline;
+  }
   let data = {};
   try { data = await res.json(); } catch (_) { /* empty body */ }
   if (res.status === 401 && state.user) { showLogin(); throw new Error("Session expired. Please sign in again."); }
@@ -2034,11 +2042,29 @@ function appwriteModal(info) {
   });
 }
 
-function showLogin() {
+function showLogin(offline) {
   state.user = null;
   el("app").classList.add("hidden");
   el("login-screen").classList.remove("hidden");
+  setOfflineNotice(offline === true || !navigator.onLine);
   closeModal();
+}
+
+/**
+ * Signing in needs the server, so with no connection the form is a dead end.
+ * Say so plainly and point at the field form, which does work offline.
+ */
+function setOfflineNotice(offline) {
+  el("offline-notice").classList.toggle("hidden", !offline);
+  el("login-hint").classList.toggle("hidden", offline);
+  // The inputs are required; leaving them hidden but present would make the
+  // browser refuse the submit with an error about a non-focusable control.
+  el("login-fields").classList.toggle("hidden", offline);
+  el("login-submit").classList.toggle("hidden", offline);
+  el("login-fields").querySelectorAll("input").forEach((input) => {
+    input.required = !offline;
+    input.disabled = offline;
+  });
 }
 
 async function showApp(user) {
@@ -2097,6 +2123,12 @@ document.addEventListener("keydown", (e) => {
   if (el("modal-root").innerHTML) closeModal(); else toggleNav(false);
 });
 window.addEventListener("hashchange", () => { if (state.user) router(); });
+window.addEventListener("offline", () => { if (!state.user) setOfflineNotice(true); });
+window.addEventListener("online", () => {
+  if (state.user) return;
+  setOfflineNotice(false);
+  location.reload();          // the server is back; start cleanly
+});
 
 // Any table rendered into the page or a modal gets its cells labelled.
 const tableWatcher = new MutationObserver(() => labelTableCells());
@@ -2128,12 +2160,15 @@ if ("serviceWorker" in navigator) {
   try {
     const me = await api("/me");
     await showApp(me.user);
-  } catch (_) {
+  } catch (err) {
+    let offline = err.offline === true;
     try {
       state.company = await api("/branding");
       applyBranding();
-    } catch (__) { /* server unreachable - login screen keeps its defaults */ }
-    showLogin();
+    } catch (second) {
+      offline = offline || second.offline === true;
+    }
+    showLogin(offline);
   }
 })();
 

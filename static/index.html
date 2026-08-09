@@ -22,18 +22,27 @@
     <img id="login-logo" class="login-logo" alt="">
     <h1 id="login-company">Usman Traders &amp; Suppliers</h1>
     <p class="login-sub">Business Management System</p>
-    <label>Username
-      <input name="username" autocomplete="username" required autofocus>
-    </label>
-    <label>Password
-      <input name="password" type="password" autocomplete="current-password" required>
-    </label>
+    <div id="offline-notice" class="offline-notice hidden">
+      <strong>No internet connection</strong>
+      <p>Signing in needs a connection to the office, so this screen cannot let you
+         in right now. It will work again as soon as you are back online.</p>
+      <a class="btn btn-primary btn-block" href="/field.html">Open Field Booking &mdash; works offline</a>
+    </div>
+
+    <div id="login-fields">
+      <label>Username
+        <input name="username" autocomplete="username" required autofocus>
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+    </div>
     <div class="demo-banner hidden" id="login-demo-banner">
       Demo deployment &mdash; data resets when the server restarts.
     </div>
     <div id="login-error" class="form-error hidden"></div>
-    <button class="btn btn-primary btn-block" type="submit">Sign In</button>
-    <p class="login-hint">First run: <strong>admin</strong> / <strong>admin123</strong></p>
+    <button class="btn btn-primary btn-block" type="submit" id="login-submit">Sign In</button>
+    <p class="login-hint" id="login-hint">First run: <strong>admin</strong> / <strong>admin123</strong></p>
   </form>
 </div>
 

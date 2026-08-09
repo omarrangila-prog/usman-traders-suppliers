@@ -120,12 +120,28 @@ a:hover { text-decoration: underline; }
   padding-top: 15px; border-top: 1px solid var(--line-2);
 }
 
+.offline-notice {
+  background: var(--amber-bg); border: 1px solid #f5e0bd;
+  border-radius: var(--radius-sm); padding: 15px; margin-bottom: 16px; text-align: left;
+}
+.offline-notice strong { display: block; color: var(--amber); margin-bottom: 5px; font-size: 14px; }
+.offline-notice p { margin: 0 0 13px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+.offline-notice .btn { text-decoration: none; }
+
 .demo-banner {
   background: var(--amber-bg); color: var(--amber);
   border-bottom: 1px solid #f5e0bd; padding: 10px 24px;
   font-size: 12.5px; line-height: 1.5; text-align: left;
 }
-.login-card .demo-banner {
+.login-card .offline-notice {
+  background: var(--amber-bg); border: 1px solid #f5e0bd;
+  border-radius: var(--radius-sm); padding: 15px; margin-bottom: 16px; text-align: left;
+}
+.offline-notice strong { display: block; color: var(--amber); margin-bottom: 5px; font-size: 14px; }
+.offline-notice p { margin: 0 0 13px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+.offline-notice .btn { text-decoration: none; }
+
+.demo-banner {
   border: 1px solid #f5e0bd; border-radius: var(--radius-sm);
   margin-bottom: 15px; padding: 10px 12px; text-align: center;
 }
@@ -613,7 +629,15 @@ body.nav-open { overflow: hidden; }
 
   .card-head { padding: 12px 14px; }
   .card-body { padding: 14px; }
-  .demo-banner { padding: 10px 14px; font-size: 12px; }
+  .offline-notice {
+  background: var(--amber-bg); border: 1px solid #f5e0bd;
+  border-radius: var(--radius-sm); padding: 15px; margin-bottom: 16px; text-align: left;
+}
+.offline-notice strong { display: block; color: var(--amber); margin-bottom: 5px; font-size: 14px; }
+.offline-notice p { margin: 0 0 13px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+.offline-notice .btn { text-decoration: none; }
+
+.demo-banner { padding: 10px 14px; font-size: 12px; }
 
   /* Modals become full-height sheets with a pinned action bar */
   .modal-backdrop { padding: 0; align-items: stretch; }
