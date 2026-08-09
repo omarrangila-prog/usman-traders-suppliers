@@ -202,6 +202,44 @@ CREATE TABLE IF NOT EXISTS field_entries (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Double-entry bookkeeping. Every financial event writes a balanced journal
+-- entry, and the statements are derived from those entries rather than
+-- recalculated from documents - so the books can always be traced and proved.
+CREATE TABLE IF NOT EXISTS accounts (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    code     TEXT NOT NULL UNIQUE,
+    name     TEXT NOT NULL,
+    type     TEXT NOT NULL,               -- Asset, Liability, Equity, Income, Expense
+    subtype  TEXT NOT NULL DEFAULT '',
+    is_cash  INTEGER NOT NULL DEFAULT 0,  -- cash and bank, for the cash summary
+    system   INTEGER NOT NULL DEFAULT 0,  -- posted to automatically; do not delete
+    active   INTEGER NOT NULL DEFAULT 1,
+    notes    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_no   TEXT NOT NULL,
+    entry_date TEXT NOT NULL,
+    memo       TEXT NOT NULL DEFAULT '',
+    source     TEXT NOT NULL DEFAULT 'Manual',
+    source_id  INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS journal_lines (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id   INTEGER NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    debit      REAL NOT NULL DEFAULT 0,
+    credit     REAL NOT NULL DEFAULT 0,
+    memo       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON journal_lines(entry_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_account ON journal_lines(account_id);
+CREATE INDEX IF NOT EXISTS idx_journal_source ON journal_entries(source, source_id);
+
 CREATE TABLE IF NOT EXISTS stock_moves (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -541,6 +579,30 @@ def default_logo():
         return placeholder_logo()
 
 
+# A chart a trading business can actually use, in the usual numbering ranges.
+# (code, name, type, subtype, is_cash, system)
+CHART = [
+    ("1000", "Cash in Hand",        "Asset",     "Current Asset", 1, 1),
+    ("1010", "Bank Account",        "Asset",     "Current Asset", 1, 1),
+    ("1100", "Accounts Receivable", "Asset",     "Current Asset", 0, 1),
+    ("1200", "Inventory",           "Asset",     "Current Asset", 0, 1),
+    ("1500", "Equipment",           "Asset",     "Fixed Asset",   0, 0),
+    ("2000", "Accounts Payable",    "Liability", "Current Liability", 0, 1),
+    ("2100", "Tax Payable",         "Liability", "Current Liability", 0, 1),
+    ("3000", "Owner's Capital",     "Equity",    "", 0, 1),
+    ("3900", "Retained Earnings",   "Equity",    "", 0, 1),
+    ("4000", "Sales",               "Income",    "", 0, 1),
+    ("4100", "Sales Discounts",     "Income",    "Contra", 0, 1),
+    ("5000", "Cost of Goods Sold",  "Expense",   "Cost of Sales", 0, 1),
+    ("6000", "Salaries & Wages",    "Expense",   "Operating", 0, 0),
+    ("6100", "Rent",                "Expense",   "Operating", 0, 0),
+    ("6200", "Utilities",           "Expense",   "Operating", 0, 0),
+    ("6300", "Transport & Delivery","Expense",   "Operating", 0, 0),
+    ("6400", "Packing & Supplies",  "Expense",   "Operating", 0, 0),
+    ("6900", "Other Expenses",      "Expense",   "Operating", 0, 0),
+]
+
+
 def seed(conn):
     """Populate first-run defaults: admin user, company profile, item master."""
     cur = conn.cursor()
@@ -562,6 +624,12 @@ def seed(conn):
         current = cur.execute("SELECT logo FROM company WHERE id = 1").fetchone()
         if current and (not current["logo"] or current["logo"].startswith("data:image/svg+xml")):
             cur.execute("UPDATE company SET logo = ? WHERE id = 1", (default_logo(),))
+
+    cur.execute("SELECT COUNT(*) c FROM accounts")
+    if cur.fetchone()["c"] == 0:
+        cur.executemany(
+            """INSERT INTO accounts (code, name, type, subtype, is_cash, system)
+               VALUES (?,?,?,?,?,?)""", CHART)
 
     cur.execute("SELECT COUNT(*) c FROM users")
     if cur.fetchone()["c"] == 0:

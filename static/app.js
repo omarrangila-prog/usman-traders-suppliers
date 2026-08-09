@@ -340,6 +340,9 @@ const ROUTES = [
   { path: "products", title: "Products", icon: "◧", group: "Catalogue", view: viewProducts },
   { path: "inventory", title: "Inventory", icon: "▩", group: "Catalogue", view: viewInventory },
   { path: "customers", title: "Customers", icon: "◍", group: "Contacts", view: viewCustomers },
+  { path: "accounts", title: "Chart of Accounts", icon: "▤", group: "Accounting", view: viewAccounts },
+  { path: "journal", title: "Journal", icon: "✎", group: "Accounting", view: viewJournal },
+  { path: "financials", title: "Financial Statements", icon: "▦", group: "Accounting", view: viewFinancials },
   { path: "reports", title: "Reports", icon: "▧", group: "Insights", view: viewReports },
   { path: "company", title: "Company Profile", icon: "★", group: "Settings", view: viewCompany },
   { path: "users", title: "Users & Access", icon: "◈", group: "Settings", view: viewUsers, adminOnly: true },
@@ -1636,6 +1639,333 @@ async function customerLedger(customerId) {
           : `<tr><td colspan="5" class="empty">No orders yet.</td></tr>`}
         </tbody></table></div>`,
   });
+}
+
+// -------------------------------------------------------------- accounting
+
+const ACCOUNT_TYPES = ["Asset", "Liability", "Equity", "Income", "Expense"];
+
+async function viewAccounts(rest) {
+  if (rest[0]) return viewLedger(rest[0]);
+  const accounts = await api("/accounts");
+  pageAction("+ New Account", () => accountModal());
+
+  const groups = ACCOUNT_TYPES.map((kind) => {
+    const list = accounts.filter((a) => a.type === kind);
+    if (!list.length) return "";
+    return `<tr><td colspan="5" style="background:var(--surface-2);font-weight:700;
+              text-transform:uppercase;font-size:11px;letter-spacing:.06em;color:var(--ink-3)">
+              ${h(kind)}</td></tr>` + list.map((a) => {
+      const net = kind === "Asset" || kind === "Expense"
+        ? a.debits - a.credits : a.credits - a.debits;
+      return `<tr>
+        <td class="mono strong"><a href="#/accounts/${a.id}">${h(a.code)}</a></td>
+        <td>${h(a.name)}${a.system ? ` <span class="badge grey">system</span>` : ""}</td>
+        <td class="muted">${h(a.subtype) || "-"}</td>
+        <td class="num strong">${money(net)}</td>
+        <td class="row-actions">
+          <a class="btn btn-sm" href="#/accounts/${a.id}">Ledger</a>
+          ${a.system ? "" : `<button class="btn btn-sm btn-danger" data-del="${a.id}">Delete</button>`}
+        </td></tr>`;
+    }).join("");
+  }).join("");
+
+  el("content").innerHTML = `
+    <div class="card"><div class="card-body">
+      <p class="muted" style="margin:0">Every invoice, purchase, payment and expense posts
+        to these accounts automatically. Click any account to see its ledger.</p>
+    </div></div>
+    ${tableCard(`<th>Code</th><th>Account</th><th>Group</th><th class="num">Balance</th><th></th>`,
+      groups)}`;
+
+  document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+    const a = accounts.find((x) => String(x.id) === b.dataset.del);
+    confirmDialog(`Delete account ${a.code} ${a.name}?`, async () => {
+      closeModal();
+      deleteWithCascade("/accounts/" + a.id, "Account", viewAccounts);
+    }, "Delete account");
+  }));
+}
+
+function accountModal() {
+  modal({
+    title: "New account",
+    body: `
+      <div class="field-row">
+        <label class="field">Code *<input name="code" placeholder="6500" required></label>
+        <label class="field">Name *<input name="name" placeholder="Marketing" required></label>
+      </div>
+      <div class="field-row">
+        <label class="field">Type *
+          <select name="type">${ACCOUNT_TYPES.map((t) => `<option>${t}</option>`).join("")}</select></label>
+        <label class="field">Group<input name="subtype" placeholder="Operating"></label>
+      </div>
+      <label class="checkbox"><input type="checkbox" name="is_cash"> This is a cash or bank account</label>`,
+    submitLabel: "Create account",
+    onSubmit: async (form) => {
+      await api("/accounts", { method: "POST", body: formValues(form) });
+      toast("Account created.", "success");
+      viewAccounts([]);
+    },
+  });
+}
+
+async function viewLedger(accountId) {
+  const data = await api("/reports/ledger/" + accountId);
+  el("page-title").textContent = `${data.account.code} ${data.account.name}`;
+  pageAction("Back to Chart", () => go("accounts"), "btn");
+  el("content").innerHTML = `
+    <div class="stat-grid">
+      <div class="stat blue"><div class="label">Closing balance</div>
+        <div class="value">${cur(data.closing)}</div>
+        <div class="sub">${h(data.account.type)}</div></div>
+      <div class="stat"><div class="label">Postings</div>
+        <div class="value">${data.lines.length}</div></div>
+    </div>
+    ${tableCard(`<th>Date</th><th>Entry</th><th>Detail</th>
+       <th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th>`,
+      data.lines.length ? data.lines.map((l) => `<tr>
+        <td>${fmtDate(l.entry_date)}</td>
+        <td class="mono">${h(l.entry_no)}<div class="muted">${h(l.source)}</div></td>
+        <td>${h(l.line_memo || l.memo)}</td>
+        <td class="num">${l.debit ? money(l.debit) : ""}</td>
+        <td class="num">${l.credit ? money(l.credit) : ""}</td>
+        <td class="num strong">${money(l.balance)}</td></tr>`).join("") : null,
+      emptyState("▤", "Nothing posted here yet", "Postings appear as you trade."))}`;
+}
+
+async function viewJournal() {
+  await loadMasters();
+  const [entries, accounts] = await Promise.all([api("/journal"), api("/accounts")]);
+  pageAction("+ Journal Entry", () => journalModal(accounts));
+  pageAction("Record Expense", () => expenseModal(accounts), "btn");
+
+  el("content").innerHTML = tableCard(
+    `<th>Date</th><th>Entry</th><th>Description</th><th>Accounts</th>
+     <th class="num">Amount</th><th></th>`,
+    entries.length ? entries.map((e) => {
+      const total = e.lines.reduce((s, l) => s + l.debit, 0);
+      return `<tr>
+        <td>${fmtDate(e.entry_date)}</td>
+        <td class="mono strong">${h(e.entry_no)}<div class="muted">${h(e.source)}</div></td>
+        <td>${h(e.memo)}</td>
+        <td class="muted" style="font-size:12px">${e.lines.map((l) =>
+          `${h(l.code)} ${l.debit ? "Dr " + money(l.debit) : "Cr " + money(l.credit)}`
+          ).join("<br>")}</td>
+        <td class="num strong">${money(total)}</td>
+        <td class="row-actions">${e.source === "Manual"
+          ? `<button class="btn btn-sm btn-danger" data-del="${e.id}">Delete</button>` : ""}</td>
+      </tr>`;
+    }).join("") : null,
+    emptyState("✎", "No entries yet", "Entries appear as you invoice, buy and pay."));
+
+  document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+    confirmDialog("Delete this journal entry?", async () => {
+      await api("/journal/" + b.dataset.del, { method: "DELETE" });
+      toast("Entry deleted.", "success");
+      viewJournal();
+    }, "Delete entry");
+  }));
+}
+
+function accountOptions(accounts, selected) {
+  return accounts.map((a) =>
+    `<option value="${a.id}" ${String(a.id) === String(selected) ? "selected" : ""}>
+       ${h(a.code)} - ${h(a.name)}</option>`).join("");
+}
+
+function journalModal(accounts) {
+  let lines = [{}, {}];
+  const render = () => `
+    <label class="field">Date<input type="date" name="entry_date" value="${today()}"></label>
+    <label class="field" style="margin-top:12px">Description
+      <input name="memo" placeholder="What this entry is for"></label>
+    <table class="items-table" style="margin-top:14px"><thead><tr>
+      <th style="width:52%">Account</th><th>Debit</th><th>Credit</th></tr></thead>
+      <tbody>${lines.map((_, i) => `<tr>
+        <td><select data-i="${i}" data-f="account_id">
+          <option value="">Select...</option>${accountOptions(accounts)}</select></td>
+        <td><input class="qty" type="number" step="0.01" min="0" data-i="${i}" data-f="debit"></td>
+        <td><input class="qty" type="number" step="0.01" min="0" data-i="${i}" data-f="credit"></td>
+      </tr>`).join("")}</tbody></table>
+    <button type="button" class="btn btn-sm" id="add-jline">+ Add line</button>
+    <div class="muted" id="jbalance" style="margin-top:10px;font-size:12.5px"></div>`;
+
+  const form = modal({
+    title: "Journal entry", wide: true, body: render(), submitLabel: "Post entry",
+    onSubmit: async (f) => {
+      const values = formValues(f);
+      await api("/journal", { method: "POST", body: {
+        entry_date: values.entry_date, memo: values.memo, lines }});
+      toast("Entry posted.", "success");
+      viewJournal();
+    },
+  });
+
+  const wire = () => {
+    form.querySelectorAll("[data-f]").forEach((input) => {
+      input.addEventListener("input", (e) => {
+        const { i, f } = e.target.dataset;
+        lines[i][f] = f === "account_id" ? e.target.value : Number(e.target.value || 0);
+        const dr = lines.reduce((s, l) => s + (l.debit || 0), 0);
+        const cr = lines.reduce((s, l) => s + (l.credit || 0), 0);
+        $("#jbalance", form).innerHTML = Math.abs(dr - cr) < 0.005 && dr > 0
+          ? `<span style="color:var(--green);font-weight:700">Balanced &mdash; ${money(dr)}</span>`
+          : `Debits ${money(dr)} &middot; Credits ${money(cr)} &mdash;
+             <span style="color:var(--brand)">difference ${money(Math.abs(dr - cr))}</span>`;
+      });
+    });
+    $("#add-jline", form).addEventListener("click", () => {
+      lines.push({});
+      $(".modal-body", form).innerHTML = `<div class="form-error hidden" data-error></div>` + render();
+      wire();
+    });
+  };
+  wire();
+}
+
+function expenseModal(accounts) {
+  const expenses = accounts.filter((a) => a.type === "Expense");
+  const cash = accounts.filter((a) => a.is_cash);
+  modal({
+    title: "Record an expense",
+    body: `
+      <div class="field-row">
+        <label class="field">Date<input type="date" name="entry_date" value="${today()}"></label>
+        <label class="field">Amount *
+          <input type="number" step="0.01" min="0" name="amount" required></label>
+      </div>
+      <div class="field-row">
+        <label class="field">Expense type
+          <select name="expense_account">${expenses.map((a) =>
+            `<option value="${h(a.code)}">${h(a.code)} - ${h(a.name)}</option>`).join("")}</select></label>
+        <label class="field">Paid from
+          <select name="paid_from">${cash.map((a) =>
+            `<option value="${h(a.code)}">${h(a.name)}</option>`).join("")}</select></label>
+      </div>
+      <label class="field">Description<input name="memo" placeholder="Shop rent for August"></label>`,
+    submitLabel: "Record expense",
+    onSubmit: async (form) => {
+      await api("/expenses", { method: "POST", body: formValues(form) });
+      toast("Expense recorded.", "success");
+      viewJournal();
+    },
+  });
+}
+
+async function viewFinancials() {
+  let tab = "profit-loss";
+  let from = monthStart();
+  let to = today();
+
+  async function refresh() {
+    const box = $("#fin-body");
+    box.innerHTML = `<div class="empty"><div class="big">⏳</div><p>Preparing...</p></div>`;
+    try {
+      if (tab === "profit-loss") {
+        const r = await api(`/reports/profit-loss?from=${from}&to=${to}`);
+        const row = (a) => `<tr><td class="mono muted">${h(a.code)}</td><td>${h(a.name)}</td>
+          <td class="num">${money(a.amount)}</td></tr>`;
+        box.innerHTML = `
+          <div class="stat-grid">
+            <div class="stat green"><div class="label">Gross profit</div>
+              <div class="value">${cur(r.gross_profit)}</div>
+              <div class="sub">Sales less cost of sales</div></div>
+            <div class="stat ${r.net_profit >= 0 ? "green" : ""}">
+              <div class="label">Net profit</div><div class="value">${cur(r.net_profit)}</div>
+              <div class="sub">After all expenses</div></div>
+          </div>
+          ${reportTable("Income", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.income.map(row).concat([`<tr><td></td><td class="strong">Total income</td>
+              <td class="num strong">${money(r.total_income)}</td></tr>`]))}
+          ${reportTable("Cost of sales", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.expense.filter((a) => a.subtype === "Cost of Sales").map(row)
+              .concat([`<tr><td></td><td class="strong">Gross profit</td>
+                <td class="num strong">${money(r.gross_profit)}</td></tr>`]))}
+          ${reportTable("Expenses", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.expense.filter((a) => a.subtype !== "Cost of Sales").map(row)
+              .concat([`<tr><td></td><td class="strong">Net profit</td>
+                <td class="num strong">${money(r.net_profit)}</td></tr>`]))}`;
+      } else if (tab === "balance-sheet") {
+        const r = await api(`/reports/balance-sheet?to=${to}`);
+        const row = (a) => `<tr><td class="mono muted">${h(a.code)}</td><td>${h(a.name)}</td>
+          <td class="num">${money(a.amount)}</td></tr>`;
+        box.innerHTML = `
+          <div class="card"><div class="card-body">
+            <div class="${r.balances ? "" : "form-error"}" style="margin:0">
+              ${r.balances
+                ? `<span class="badge green">In balance</span>
+                   <span class="muted"> Assets ${cur(r.total_assets)} =
+                   Liabilities ${cur(r.total_liabilities)} + Equity ${cur(r.total_equity)}</span>`
+                : "The books do not balance. This should not happen - please report it."}
+            </div></div></div>
+          ${reportTable("Assets", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.assets.map(row).concat([`<tr><td></td><td class="strong">Total assets</td>
+              <td class="num strong">${money(r.total_assets)}</td></tr>`]))}
+          ${reportTable("Liabilities", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.liabilities.map(row).concat([`<tr><td></td><td class="strong">Total liabilities</td>
+              <td class="num strong">${money(r.total_liabilities)}</td></tr>`]))}
+          ${reportTable("Equity", `<th>Code</th><th>Account</th><th class="num">Amount</th>`,
+            r.equity.map(row).concat([
+              `<tr><td></td><td>Profit for the period</td>
+                <td class="num">${money(r.retained_this_period)}</td></tr>`,
+              `<tr><td></td><td class="strong">Total equity</td>
+                <td class="num strong">${money(r.total_equity)}</td></tr>`]))}`;
+      } else {
+        const r = await api(`/reports/trial-balance?to=${to}`);
+        const ok = Math.abs(r.total_debit - r.total_credit) < 0.01;
+        box.innerHTML = `
+          <div class="card"><div class="card-body" style="margin:0">
+            ${ok ? `<span class="badge green">Balanced</span>
+                    <span class="muted"> Debits and credits both ${cur(r.total_debit)}</span>`
+                 : `<div class="form-error">Out of balance.</div>`}
+          </div></div>
+          ${reportTable("Trial balance", `<th>Code</th><th>Account</th>
+            <th class="num">Debit</th><th class="num">Credit</th>`,
+            r.accounts.map((a) => `<tr><td class="mono muted">${h(a.code)}</td>
+              <td>${h(a.name)}</td>
+              <td class="num">${a.debit_balance ? money(a.debit_balance) : ""}</td>
+              <td class="num">${a.credit_balance ? money(a.credit_balance) : ""}</td></tr>`)
+              .concat([`<tr><td></td><td class="strong">Totals</td>
+                <td class="num strong">${money(r.total_debit)}</td>
+                <td class="num strong">${money(r.total_credit)}</td></tr>`]))}`;
+      }
+    } catch (err) {
+      box.innerHTML = err.offline ? offlinePanel()
+        : `<div class="card"><div class="card-body"><div class="form-error">${h(err.message)}</div></div></div>`;
+    }
+  }
+
+  pageAction("Print", () => {
+    el("print-root").innerHTML = `<div class="doc">
+      <h2 style="color:var(--brand)">${h(state.company.name)}</h2>
+      <p class="muted">${tab.replace("-", " ")} &middot; to ${fmtDate(to)}</p>
+      ${$("#fin-body").innerHTML}</div>`;
+    window.print();
+  }, "btn");
+
+  el("content").innerHTML = `
+    <div class="toolbar">
+      <select id="f-tab">
+        <option value="profit-loss">Profit &amp; Loss</option>
+        <option value="balance-sheet">Balance Sheet</option>
+        <option value="trial-balance">Trial Balance</option>
+      </select>
+      <label class="field" id="f-from">From <input type="date" id="d-from" value="${from}"></label>
+      <label class="field">As at <input type="date" id="d-to" value="${to}"></label>
+      <button class="btn btn-primary btn-sm" id="f-run">Show</button>
+    </div>
+    <div id="fin-body"></div>`;
+
+  $("#f-tab").addEventListener("change", (e) => {
+    tab = e.target.value;
+    $("#f-from").classList.toggle("hidden", tab !== "profit-loss");
+    refresh();
+  });
+  $("#f-run").addEventListener("click", () => {
+    from = $("#d-from").value; to = $("#d-to").value; refresh();
+  });
+  refresh();
 }
 
 // ----------------------------------------------------------------- reports

@@ -650,8 +650,10 @@ def set_order_status(ctx, order_id):
     should_apply = status == "Delivered"
     if should_apply and not order["stock_applied"]:
         apply_order_stock(ctx.conn, order_id, -1)
+        post_cogs(ctx.conn, order_id)
     elif not should_apply and order["stock_applied"]:
         apply_order_stock(ctx.conn, order_id, +1)
+        unpost(ctx.conn, "COGS", order_id)
     ctx.conn.commit()
     return {"ok": True, "status": status, "delivery_status": delivery}
 
@@ -755,6 +757,7 @@ def invoice_from_order(ctx, order_id):
         ctx.conn.execute(
             "INSERT INTO invoice_items (invoice_id, product_id, qty, price, line_total) VALUES (?,?,?,?,?)",
             (invoice_id, item["product_id"], item["qty"], item["price"], item["line_total"]))
+    post_invoice(ctx.conn, invoice_id)
     ctx.conn.commit()
     return {"id": invoice_id, "invoice_no": invoice_no}
 
@@ -783,6 +786,19 @@ def create_invoice(ctx):
             "INSERT INTO invoice_items (invoice_id, product_id, qty, price, line_total) VALUES (?,?,?,?,?)",
             (invoice_id, item["product_id"], item["qty"], item["price"], item["line_total"]))
         log_move(ctx.conn, item["product_id"], "Sale Out", -item["qty"], invoice_no, "Direct sale")
+    post_invoice(ctx.conn, invoice_id)
+    cost = round(sum(
+        num(ctx.conn.execute("SELECT purchase_price p FROM products WHERE id = ?",
+            (i["product_id"],)).fetchone()["p"]) * i["qty"] for i in items), 2)
+    if cost > 0:
+        post(ctx.conn, text(body.get("invoice_date"), today()) or today(),
+             f"Cost of goods on {invoice_no}",
+             [("5000", cost, 0, invoice_no), ("1200", 0, cost, invoice_no)],
+             "COGS-Invoice", invoice_id)
+    if paid > 0:
+        post_receipt(ctx.conn, invoice_id, paid,
+                     text(body.get("account"), "1000") or "1000",
+                     text(body.get("invoice_date"), today()) or today())
     ctx.conn.commit()
     return {"id": invoice_id, "invoice_no": invoice_no}
 
@@ -799,6 +815,11 @@ def record_payment(ctx, invoice_id):
     paid = max(0.0, min(paid, invoice["total"]))
     ctx.conn.execute("UPDATE invoices SET paid = ?, status = ? WHERE id = ?",
                      (paid, invoice_status(invoice["total"], paid), invoice_id))
+    received = round(paid - invoice["paid"], 2)
+    if received > 0:
+        post_receipt(ctx.conn, invoice_id, received,
+                     text(ctx.body.get("account"), "1000") or "1000",
+                     text(ctx.body.get("date"), today()) or today())
     ctx.conn.commit()
     return {"paid": paid, "status": invoice_status(invoice["total"], paid)}
 
@@ -887,6 +908,11 @@ def create_purchase(ctx):
             for item in items:
                 ctx.conn.execute("UPDATE products SET purchase_price = ? WHERE id = ?",
                                  (item["price"], item["product_id"]))
+    post_purchase(ctx.conn, purchase_id)
+    if paid > 0:
+        post_supplier_payment(ctx.conn, purchase_id, paid,
+                              text(body.get("account"), "1000") or "1000",
+                              text(body.get("purchase_date"), today()) or today())
     ctx.conn.commit()
     return {"id": purchase_id, "purchase_no": purchase_no}
 
@@ -925,6 +951,11 @@ def pay_purchase(ctx, purchase_id):
     amount = num(ctx.body.get("amount"))
     paid = max(0.0, min(purchase["paid"] + amount, purchase["total"]))
     ctx.conn.execute("UPDATE purchases SET paid = ? WHERE id = ?", (round(paid, 2), purchase_id))
+    sent = round(paid - purchase["paid"], 2)
+    if sent > 0:
+        post_supplier_payment(ctx.conn, purchase_id, sent,
+                              text(ctx.body.get("account"), "1000") or "1000",
+                              text(ctx.body.get("date"), today()) or today())
     ctx.conn.commit()
     return {"paid": round(paid, 2)}
 
@@ -1117,6 +1148,122 @@ def report_inventory(ctx):
 
 
 # --------------------------------------------------------------------------
+# Bookkeeping
+#
+# Every financial event posts a balanced journal entry. The statements are read
+# back from those entries, never recomputed from documents, so what the reports
+# show is exactly what the ledger holds. post() refuses to write anything that
+# does not balance - a ledger that can drift is worse than no ledger.
+# --------------------------------------------------------------------------
+
+def account_id(conn, code):
+    row = conn.execute("SELECT id FROM accounts WHERE code = ?", (code,)).fetchone()
+    return row["id"] if row else None
+
+
+def post(conn, entry_date, memo, lines, source="Manual", source_id=None):
+    """Write one balanced entry. lines: [(account code or id, debit, credit, memo)]"""
+    prepared = []
+    for account, debit, credit, note in lines:
+        acc = account if isinstance(account, int) else account_id(conn, account)
+        if acc is None:
+            raise HttpError(400, f"No such account: {account}")
+        debit, credit = round(float(debit or 0), 2), round(float(credit or 0), 2)
+        if debit and credit:
+            raise HttpError(400, "A line is either a debit or a credit, not both.")
+        if debit or credit:
+            prepared.append((acc, debit, credit, note))
+    if not prepared:
+        return None
+
+    debits = round(sum(l[1] for l in prepared), 2)
+    credits = round(sum(l[2] for l in prepared), 2)
+    if abs(debits - credits) > 0.005:
+        raise HttpError(400, f"Entry does not balance: debits {debits} vs credits {credits}.")
+
+    number = db.next_number(conn, "journal_entries", "entry_no", "JV")
+    cur = conn.execute(
+        """INSERT INTO journal_entries (entry_no, entry_date, memo, source, source_id)
+           VALUES (?,?,?,?,?)""", (number, entry_date, memo, source, source_id))
+    entry_id = cur.lastrowid
+    for acc, debit, credit, note in prepared:
+        conn.execute(
+            """INSERT INTO journal_lines (entry_id, account_id, debit, credit, memo)
+               VALUES (?,?,?,?,?)""", (entry_id, acc, debit, credit, note))
+    return entry_id
+
+
+def unpost(conn, source, source_id):
+    """Remove the entries a document produced, used when it is deleted."""
+    for row in conn.execute(
+            "SELECT id FROM journal_entries WHERE source = ? AND source_id = ?",
+            (source, source_id)).fetchall():
+        conn.execute("DELETE FROM journal_entries WHERE id = ?", (row["id"],))
+
+
+def post_invoice(conn, invoice_id):
+    """Sale on credit: the customer owes us, income is earned, tax is collected."""
+    inv = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not inv:
+        return
+    unpost(conn, "Invoice", invoice_id)
+    memo = f"Invoice {inv['invoice_no']}"
+    lines = [("1100", inv["total"], 0, memo),
+             ("4000", 0, inv["subtotal"], memo)]
+    if inv["discount"]:
+        lines.append(("4100", inv["discount"], 0, "Discount given"))
+    if inv["tax"]:
+        lines.append(("2100", 0, inv["tax"], "Tax on sale"))
+    post(conn, inv["invoice_date"], memo, lines, "Invoice", invoice_id)
+
+
+def post_cogs(conn, order_id):
+    """Goods leaving the shelf become a cost, at what they cost us to buy."""
+    order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    if not order:
+        return
+    unpost(conn, "COGS", order_id)
+    cost = conn.execute(
+        """SELECT COALESCE(SUM(oi.qty * p.purchase_price), 0) c
+           FROM order_items oi JOIN products p ON p.id = oi.product_id
+           WHERE oi.order_id = ?""", (order_id,)).fetchone()["c"]
+    cost = round(cost, 2)
+    if cost <= 0:
+        return
+    memo = f"Cost of goods on {order['order_no']}"
+    post(conn, order["order_date"], memo,
+         [("5000", cost, 0, memo), ("1200", 0, cost, memo)], "COGS", order_id)
+
+
+def post_purchase(conn, purchase_id):
+    """Goods bought on credit: stock rises, we owe the supplier."""
+    pur = conn.execute("SELECT * FROM purchases WHERE id = ?", (purchase_id,)).fetchone()
+    if not pur:
+        return
+    unpost(conn, "Purchase", purchase_id)
+    memo = f"Purchase {pur['purchase_no']}"
+    goods = round(pur["subtotal"] - pur["discount"], 2)
+    lines = [("1200", goods, 0, memo), ("2000", 0, pur["total"], memo)]
+    if pur["tax"]:
+        lines.append(("2100", pur["tax"], 0, "Tax on purchase"))
+    post(conn, pur["purchase_date"], memo, lines, "Purchase", purchase_id)
+
+
+def post_receipt(conn, invoice_id, amount, account_code, when):
+    inv = conn.execute("SELECT invoice_no FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    memo = f"Payment received on {inv['invoice_no']}" if inv else "Payment received"
+    post(conn, when, memo,
+         [(account_code, amount, 0, memo), ("1100", 0, amount, memo)], "Receipt", invoice_id)
+
+
+def post_supplier_payment(conn, purchase_id, amount, account_code, when):
+    pur = conn.execute("SELECT purchase_no FROM purchases WHERE id = ?", (purchase_id,)).fetchone()
+    memo = f"Paid supplier for {pur['purchase_no']}" if pur else "Supplier payment"
+    post(conn, when, memo,
+         [("2000", amount, 0, memo), (account_code, 0, amount, memo)], "Payment", purchase_id)
+
+
+# --------------------------------------------------------------------------
 # Deletion
 #
 # Anything can be removed, but never silently: a delete that would take other
@@ -1141,7 +1288,10 @@ def purge_order(conn, order_id):
         apply_order_stock(conn, order_id, +1)
     for invoice in conn.execute(
             "SELECT id FROM invoices WHERE order_id = ?", (order_id,)).fetchall():
+        unpost(conn, "Invoice", invoice["id"])
+        unpost(conn, "Receipt", invoice["id"])
         conn.execute("DELETE FROM invoices WHERE id = ?", (invoice["id"],))
+    unpost(conn, "COGS", order_id)
     conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
 
 
@@ -1154,6 +1304,8 @@ def purge_invoice(conn, invoice_id):
                 "SELECT * FROM invoice_items WHERE invoice_id = ?", (invoice_id,)).fetchall():
             log_move(conn, item["product_id"], "Sale Return", item["qty"],
                      invoice["invoice_no"], "Invoice deleted")
+    for kind in ("Invoice", "Receipt", "COGS-Invoice"):
+        unpost(conn, kind, invoice_id)
     conn.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
 
 
@@ -1164,6 +1316,8 @@ def purge_purchase(conn, purchase_id):
         return
     if purchase["stock_applied"]:
         apply_purchase_stock(conn, purchase_id, -1)
+    unpost(conn, "Purchase", purchase_id)
+    unpost(conn, "Payment", purchase_id)
     conn.execute("DELETE FROM purchases WHERE id = ?", (purchase_id,))
 
 
@@ -1327,6 +1481,232 @@ def reject_field_entry(ctx, entry_id):
         (entry_id,))
     ctx.conn.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# Accounting endpoints
+# --------------------------------------------------------------------------
+
+NORMAL_DEBIT = ("Asset", "Expense")     # these grow with debits; the rest with credits
+
+
+@route("GET", r"/api/accounts")
+def list_accounts(ctx):
+    ctx.require_user()
+    return rows(ctx.conn.execute(
+        """SELECT a.*,
+                  ROUND(COALESCE((SELECT SUM(l.debit) FROM journal_lines l
+                                  WHERE l.account_id = a.id), 0), 2) AS debits,
+                  ROUND(COALESCE((SELECT SUM(l.credit) FROM journal_lines l
+                                  WHERE l.account_id = a.id), 0), 2) AS credits
+           FROM accounts a ORDER BY a.code"""))
+
+
+@route("POST", r"/api/accounts")
+def create_account(ctx):
+    ctx.require_user()
+    code, name = text(ctx.body.get("code")), text(ctx.body.get("name"))
+    kind = text(ctx.body.get("type"))
+    if not code or not name:
+        raise HttpError(400, "Account code and name are required.")
+    if kind not in ("Asset", "Liability", "Equity", "Income", "Expense"):
+        raise HttpError(400, "Type must be Asset, Liability, Equity, Income or Expense.")
+    if ctx.conn.execute("SELECT 1 FROM accounts WHERE code = ?", (code,)).fetchone():
+        raise HttpError(400, f"Account {code} already exists.")
+    cur = ctx.conn.execute(
+        """INSERT INTO accounts (code, name, type, subtype, is_cash) VALUES (?,?,?,?,?)""",
+        (code, name, kind, text(ctx.body.get("subtype")),
+         1 if ctx.body.get("is_cash") else 0))
+    ctx.conn.commit()
+    return {"id": cur.lastrowid}
+
+
+@route("DELETE", r"/api/accounts/(\d+)")
+def delete_account(ctx, account_id):
+    ctx.require_user()
+    account = ctx.conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not account:
+        raise HttpError(404, "Account not found.")
+    if account["system"]:
+        raise HttpError(400, "This account is used by the system and cannot be removed.")
+    used = ctx.conn.execute("SELECT COUNT(*) c FROM journal_lines WHERE account_id = ?",
+                            (account_id,)).fetchone()["c"]
+    if used and not wants_cascade(ctx):
+        blocked("This account has postings against it.", {"journal_lines": used})
+    ctx.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+@route("GET", r"/api/journal")
+def list_journal(ctx):
+    ctx.require_user()
+    where, params = ["1=1"], []
+    if ctx.query.get("from"):
+        where.append("e.entry_date >= ?")
+        params.append(ctx.query["from"])
+    if ctx.query.get("to"):
+        where.append("e.entry_date <= ?")
+        params.append(ctx.query["to"])
+    if ctx.query.get("account_id"):
+        where.append("EXISTS (SELECT 1 FROM journal_lines x WHERE x.entry_id = e.id "
+                     "AND x.account_id = ?)")
+        params.append(ctx.query["account_id"])
+    entries = rows(ctx.conn.execute(
+        f"""SELECT e.* FROM journal_entries e WHERE {' AND '.join(where)}
+            ORDER BY e.entry_date DESC, e.id DESC LIMIT 300""", params))
+    for entry in entries:
+        entry["lines"] = rows(ctx.conn.execute(
+            """SELECT l.*, a.code, a.name FROM journal_lines l
+               JOIN accounts a ON a.id = l.account_id WHERE l.entry_id = ?
+               ORDER BY l.debit DESC""", (entry["id"],)))
+    return entries
+
+
+@route("POST", r"/api/journal")
+def create_journal(ctx):
+    """A manual entry, for anything the documents do not cover."""
+    ctx.require_user()
+    lines = []
+    for raw in ctx.body.get("lines") or []:
+        if not raw.get("account_id"):
+            continue
+        lines.append((int(raw["account_id"]), num(raw.get("debit")),
+                      num(raw.get("credit")), text(raw.get("memo"))))
+    if len(lines) < 2:
+        raise HttpError(400, "An entry needs at least two lines.")
+    entry_id = post(ctx.conn, text(ctx.body.get("entry_date"), today()) or today(),
+                    text(ctx.body.get("memo")), lines, "Manual")
+    ctx.conn.commit()
+    return {"id": entry_id}
+
+
+@route("DELETE", r"/api/journal/(\d+)")
+def delete_journal(ctx, entry_id):
+    ctx.require_user()
+    entry = ctx.conn.execute(
+        "SELECT source FROM journal_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not entry:
+        raise HttpError(404, "Entry not found.")
+    if entry["source"] != "Manual":
+        raise HttpError(400, "This entry belongs to a document. Delete the document instead.")
+    ctx.conn.execute("DELETE FROM journal_entries WHERE id = ?", (entry_id,))
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+@route("POST", r"/api/expenses")
+def record_expense(ctx):
+    """Money out that is not a supplier bill - rent, wages, fuel."""
+    ctx.require_user()
+    amount = num(ctx.body.get("amount"))
+    if amount <= 0:
+        raise HttpError(400, "Enter an amount greater than zero.")
+    expense = text(ctx.body.get("expense_account"), "6900") or "6900"
+    paid_from = text(ctx.body.get("paid_from"), "1000") or "1000"
+    memo = text(ctx.body.get("memo"), "Expense") or "Expense"
+    entry_id = post(ctx.conn, text(ctx.body.get("entry_date"), today()) or today(), memo,
+                    [(expense, amount, 0, memo), (paid_from, 0, amount, memo)], "Expense")
+    ctx.conn.commit()
+    return {"id": entry_id}
+
+
+def balances(conn, start=None, end=None):
+    where, params = ["1=1"], []
+    if start:
+        where.append("e.entry_date >= ?")
+        params.append(start)
+    if end:
+        where.append("e.entry_date <= ?")
+        params.append(end)
+    return rows(conn.execute(
+        f"""SELECT a.id, a.code, a.name, a.type, a.subtype, a.is_cash,
+                   ROUND(COALESCE(SUM(l.debit), 0), 2)  AS debit,
+                   ROUND(COALESCE(SUM(l.credit), 0), 2) AS credit
+            FROM accounts a
+            LEFT JOIN journal_lines l ON l.account_id = a.id
+            LEFT JOIN journal_entries e ON e.id = l.entry_id AND {' AND '.join(where)}
+            GROUP BY a.id ORDER BY a.code""", params))
+
+
+def signed(account):
+    """Balance in the direction the account naturally runs."""
+    diff = account["debit"] - account["credit"]
+    return round(diff if account["type"] in NORMAL_DEBIT else -diff, 2)
+
+
+@route("GET", r"/api/reports/trial-balance")
+def trial_balance(ctx):
+    ctx.require_user()
+    end = text(ctx.query.get("to"), today())
+    accounts = [a for a in balances(ctx.conn, None, end) if a["debit"] or a["credit"]]
+    for a in accounts:
+        net = round(a["debit"] - a["credit"], 2)
+        a["debit_balance"] = net if net > 0 else 0
+        a["credit_balance"] = -net if net < 0 else 0
+    return {"to": end, "accounts": accounts,
+            "total_debit": round(sum(a["debit_balance"] for a in accounts), 2),
+            "total_credit": round(sum(a["credit_balance"] for a in accounts), 2)}
+
+
+@route("GET", r"/api/reports/profit-loss")
+def profit_loss(ctx):
+    ctx.require_user()
+    start = text(ctx.query.get("from"), datetime.now().strftime("%Y-%m-01"))
+    end = text(ctx.query.get("to"), today())
+    accounts = balances(ctx.conn, start, end)
+    income = [dict(a, amount=signed(a)) for a in accounts
+              if a["type"] == "Income" and (a["debit"] or a["credit"])]
+    expense = [dict(a, amount=signed(a)) for a in accounts
+               if a["type"] == "Expense" and (a["debit"] or a["credit"])]
+    total_income = round(sum(a["amount"] for a in income), 2)
+    cost_of_sales = round(sum(a["amount"] for a in expense
+                              if a["subtype"] == "Cost of Sales"), 2)
+    operating = round(sum(a["amount"] for a in expense
+                          if a["subtype"] != "Cost of Sales"), 2)
+    return {"from": start, "to": end, "income": income, "expense": expense,
+            "total_income": total_income, "cost_of_sales": cost_of_sales,
+            "gross_profit": round(total_income - cost_of_sales, 2),
+            "operating_expenses": operating,
+            "net_profit": round(total_income - cost_of_sales - operating, 2)}
+
+
+@route("GET", r"/api/reports/balance-sheet")
+def balance_sheet(ctx):
+    ctx.require_user()
+    end = text(ctx.query.get("to"), today())
+    accounts = balances(ctx.conn, None, end)
+    pick = lambda kind: [dict(a, amount=signed(a)) for a in accounts
+                         if a["type"] == kind and (a["debit"] or a["credit"])]
+    assets, liabilities, equity = pick("Asset"), pick("Liability"), pick("Equity")
+    # Profit for the period has not been closed to equity, so show it there.
+    earned = round(sum(signed(a) for a in accounts if a["type"] == "Income")
+                   - sum(signed(a) for a in accounts if a["type"] == "Expense"), 2)
+    total_assets = round(sum(a["amount"] for a in assets), 2)
+    total_liabilities = round(sum(a["amount"] for a in liabilities), 2)
+    total_equity = round(sum(a["amount"] for a in equity) + earned, 2)
+    return {"to": end, "assets": assets, "liabilities": liabilities, "equity": equity,
+            "retained_this_period": earned, "total_assets": total_assets,
+            "total_liabilities": total_liabilities, "total_equity": total_equity,
+            "balances": abs(total_assets - (total_liabilities + total_equity)) < 0.05}
+
+
+@route("GET", r"/api/reports/ledger/(\d+)")
+def account_ledger(ctx, account_id):
+    ctx.require_user()
+    account = ctx.conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not account:
+        raise HttpError(404, "Account not found.")
+    lines = rows(ctx.conn.execute(
+        """SELECT e.entry_no, e.entry_date, e.memo, e.source, l.debit, l.credit, l.memo AS line_memo
+           FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+           WHERE l.account_id = ? ORDER BY e.entry_date, e.id""", (account_id,)))
+    running = 0
+    for line in lines:
+        delta = line["debit"] - line["credit"]
+        running = round(running + (delta if account["type"] in NORMAL_DEBIT else -delta), 2)
+        line["balance"] = running
+    return {"account": dict(account), "lines": lines, "closing": running}
 
 
 # --------------------------------------------------------------------------
