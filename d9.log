@@ -1,0 +1,12 @@
+<claude-code-hint v="1" type="plugin" value="vercel@claude-plugins-official" />
+Vercel CLI 54.15.1 (Node.js 22.22.3)
+Retrieving project…
+Deploying omarrangila-2079s-projects/usman-traders
+Uploading [--------------------] (0.0B/523.7KB)
+Uploading [=====---------------] (145.3KB/523.7KB)
+Uploading [==========----------] (273.3KB/523.7KB)
+Uploading [===============-----] (403.7KB/523.7KB)
+Uploading [====================] (523.7KB/523.7KB)
+  Inspect         https://vercel.com/omarrangila-2079s-projects/usman-traders/77ejQuHsHpCwwbHRXSLsvKJx3g1A
+  Production      https://usman-traders-bcq89txid-omarrangila-2079s-projects.vercel.app
+Building…

@@ -274,6 +274,11 @@ CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
 # other projects, and "public" is where names collide.
 PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 
+# Bumped whenever tables are added. A serverless instance uses this to notice
+# that its database predates the current code; checking for one known table is
+# not enough, because that table exists happily while newer ones are missing.
+SCHEMA_VERSION = "2"
+
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
 
@@ -699,6 +704,11 @@ def init():
         conn.executescript(SCHEMA)
     conn.commit()
     seed(conn)
+    upsert = ("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
+              "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" if conn.postgres
+              else "INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)")
+    conn.execute(upsert, (SCHEMA_VERSION,))
+    conn.commit()
     return conn
 
 

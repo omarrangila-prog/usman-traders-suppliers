@@ -21,11 +21,14 @@ from app import Handler  # noqa: E402
 
 
 def ensure_schema():
+    """Build or upgrade the schema only when it is actually out of date."""
     try:
         conn = db.connect()
         try:
-            conn.execute("SELECT 1 FROM products LIMIT 1").fetchone()
-            return
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'schema_version'").fetchone()
+            if row and row["value"] == db.SCHEMA_VERSION:
+                return
         finally:
             conn.close()
     except Exception:
