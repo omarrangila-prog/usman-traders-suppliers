@@ -1492,7 +1492,7 @@ def export_products(ctx):
     return workbook_response([sheet], f"{business} Item Master")
 
 
-@route("DELETE", r"/api/field/entries/(\\d+)")
+@route("DELETE", r"/api/field/entries/(\d+)")
 def delete_field_entry(ctx, entry_id):
     ctx.require_user()
     ctx.conn.execute("DELETE FROM field_entries WHERE id = ?", (entry_id,))
