@@ -228,12 +228,39 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 );
 
 CREATE TABLE IF NOT EXISTS journal_lines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id     INTEGER NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    account_id   INTEGER NOT NULL REFERENCES accounts(id),
+    debit        REAL NOT NULL DEFAULT 0,
+    credit       REAL NOT NULL DEFAULT 0,
+    memo         TEXT NOT NULL DEFAULT '',
+    -- ticked off against a bank statement during reconciliation
+    cleared      INTEGER NOT NULL DEFAULT 0,
+    cleared_date TEXT NOT NULL DEFAULT ''
+);
+
+-- Each year-end close records how far the books were closed and the entry
+-- that swept profit into retained earnings, so it can be traced or undone.
+CREATE TABLE IF NOT EXISTS closings (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id   INTEGER NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
-    debit      REAL NOT NULL DEFAULT 0,
-    credit     REAL NOT NULL DEFAULT 0,
-    memo       TEXT NOT NULL DEFAULT ''
+    closed_to  TEXT NOT NULL,
+    entry_id   INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+    net_profit REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Straight-line depreciation: cost spread evenly over a life in months.
+CREATE TABLE IF NOT EXISTS fixed_assets (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    purchase_date TEXT NOT NULL,
+    cost          REAL NOT NULL DEFAULT 0,
+    salvage       REAL NOT NULL DEFAULT 0,
+    life_months   INTEGER NOT NULL DEFAULT 60,
+    asset_account TEXT NOT NULL DEFAULT '1500',
+    expense_account TEXT NOT NULL DEFAULT '6800',
+    depreciated_to TEXT NOT NULL DEFAULT '',
+    active        INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON journal_lines(entry_id);
@@ -277,7 +304,7 @@ PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 # Bumped whenever tables are added. A serverless instance uses this to notice
 # that its database predates the current code; checking for one known table is
 # not enough, because that table exists happily while newer ones are missing.
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
@@ -604,7 +631,9 @@ CHART = [
     ("6200", "Utilities",           "Expense",   "Operating", 0, 0),
     ("6300", "Transport & Delivery","Expense",   "Operating", 0, 0),
     ("6400", "Packing & Supplies",  "Expense",   "Operating", 0, 0),
+    ("6800", "Depreciation",        "Expense",   "Operating", 0, 1),
     ("6900", "Other Expenses",      "Expense",   "Operating", 0, 0),
+    ("1590", "Accumulated Depreciation", "Asset", "Fixed Asset", 0, 1),
 ]
 
 

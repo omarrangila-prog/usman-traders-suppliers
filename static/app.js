@@ -343,6 +343,8 @@ const ROUTES = [
   { path: "accounts", title: "Chart of Accounts", icon: "▤", group: "Accounting", view: viewAccounts },
   { path: "journal", title: "Journal", icon: "✎", group: "Accounting", view: viewJournal },
   { path: "financials", title: "Financial Statements", icon: "▦", group: "Accounting", view: viewFinancials },
+  { path: "aging", title: "Aging & Collections", icon: "◔", group: "Accounting", view: viewAging },
+  { path: "assets", title: "Fixed Assets", icon: "▣", group: "Accounting", view: viewAssets },
   { path: "reports", title: "Reports", icon: "▧", group: "Insights", view: viewReports },
   { path: "company", title: "Company Profile", icon: "★", group: "Settings", view: viewCompany },
   { path: "users", title: "Users & Access", icon: "◈", group: "Settings", view: viewUsers, adminOnly: true },
@@ -1713,6 +1715,7 @@ function accountModal() {
 async function viewLedger(accountId) {
   const data = await api("/reports/ledger/" + accountId);
   el("page-title").textContent = `${data.account.code} ${data.account.name}`;
+  if (data.account.is_cash) pageAction("Reconcile", () => reconcileModal(data.account));
   pageAction("Back to Chart", () => go("accounts"), "btn");
   el("content").innerHTML = `
     <div class="stat-grid">
@@ -1853,6 +1856,160 @@ function expenseModal(accounts) {
   });
 }
 
+async function viewAging() {
+  let kind = "receivable";
+  async function refresh() {
+    const r = await api(`/reports/aging?kind=${kind}`);
+    const b = r.buckets;
+    const label = kind === "payable" ? "we owe" : "owed to us";
+    $("#aging-body").innerHTML = `
+      <div class="stat-grid">
+        <div class="stat ${kind === "payable" ? "" : "green"}">
+          <div class="label">Total ${h(label)}</div><div class="value">${cur(r.total)}</div></div>
+        <div class="stat blue"><div class="label">Not yet due</div>
+          <div class="value">${cur(b.current)}</div></div>
+        <div class="stat amber"><div class="label">1 - 30 days</div>
+          <div class="value">${cur(b.d30)}</div></div>
+        <div class="stat amber"><div class="label">31 - 90 days</div>
+          <div class="value">${cur(b.d60 + b.d90)}</div></div>
+        <div class="stat"><div class="label">Over 90 days</div>
+          <div class="value" style="color:var(--brand)">${cur(b.older)}</div></div>
+      </div>
+      ${reportTable(kind === "payable" ? "By supplier" : "By customer",
+        `<th>${kind === "payable" ? "Supplier" : "Customer"}</th>
+         <th class="num">Not due</th><th class="num">1-30</th><th class="num">31-60</th>
+         <th class="num">61-90</th><th class="num">90+</th><th class="num">Total</th>`,
+        r.by_party.map((x) => `<tr><td class="strong">${h(x.party)}</td>
+          <td class="num">${money(x.current)}</td><td class="num">${money(x.d30)}</td>
+          <td class="num">${money(x.d60)}</td><td class="num">${money(x.d90)}</td>
+          <td class="num" style="color:var(--brand)">${money(x.older)}</td>
+          <td class="num strong">${money(x.total)}</td></tr>`))}
+      ${reportTable("Document by document",
+        `<th>Reference</th><th>Party</th><th>Date</th><th class="num">Days</th>
+         <th class="num">Outstanding</th>`,
+        r.documents.map((d) => `<tr><td class="mono">${h(d.ref)}</td>
+          <td>${h(d.party)}</td><td>${fmtDate(d.doc_date)}</td>
+          <td class="num ${d.days > 90 ? "strong" : ""}">${d.days}</td>
+          <td class="num strong">${money(d.outstanding)}</td></tr>`))}`;
+  }
+  el("content").innerHTML = `
+    <div class="toolbar">
+      <select id="a-kind">
+        <option value="receivable">Money owed to us (customers)</option>
+        <option value="payable">Money we owe (suppliers)</option>
+      </select>
+    </div><div id="aging-body"></div>`;
+  $("#a-kind").addEventListener("change", (e) => { kind = e.target.value; refresh(); });
+  refresh();
+}
+
+async function viewAssets() {
+  const assets = await api("/assets");
+  pageAction("+ New Asset", () => assetModal());
+  pageAction("Post Depreciation", () => {
+    modal({
+      title: "Post depreciation",
+      body: `<p style="margin-top:0">Posts one month of straight-line depreciation for
+        every asset that still has value to write off.</p>
+        <label class="field">Date<input type="date" name="to" value="${today()}"></label>`,
+      submitLabel: "Post depreciation",
+      onSubmit: async (form) => {
+        const r = await api("/assets/depreciate", { method: "POST", body: formValues(form) });
+        toast(r.total ? `Posted ${cur(r.total)} of depreciation.` : "Nothing left to depreciate.",
+              "success");
+        viewAssets();
+      },
+    });
+  }, "btn");
+
+  el("content").innerHTML = tableCard(
+    `<th>Asset</th><th>Bought</th><th class="num">Cost</th><th class="num">Monthly</th>
+     <th>Depreciated to</th><th></th>`,
+    assets.length ? assets.map((a) => `<tr>
+      <td class="strong">${h(a.name)}</td>
+      <td>${fmtDate(a.purchase_date)}</td>
+      <td class="num">${money(a.cost)}</td>
+      <td class="num">${money((a.cost - a.salvage) / Math.max(a.life_months, 1))}
+        <div class="muted">${a.life_months} months</div></td>
+      <td>${a.depreciated_to ? fmtDate(a.depreciated_to) : `<span class="muted">not yet</span>`}</td>
+      <td class="row-actions">
+        <button class="btn btn-sm btn-danger" data-del="${a.id}">Delete</button></td>
+    </tr>`).join("") : null,
+    emptyState("▣", "No fixed assets", "Add vehicles, freezers or equipment to depreciate them.",
+      `<button class="btn btn-primary" id="add-asset">+ New Asset</button>`));
+
+  const add = $("#add-asset");
+  if (add) add.addEventListener("click", () => assetModal());
+  document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => {
+    confirmDialog("Delete this asset? Posted depreciation stays in the ledger.", async () => {
+      await api("/assets/" + b.dataset.del, { method: "DELETE" });
+      toast("Asset removed.", "success");
+      viewAssets();
+    }, "Delete asset");
+  }));
+}
+
+function assetModal() {
+  modal({
+    title: "New fixed asset",
+    body: `
+      <label class="field">Name *<input name="name" placeholder="Delivery van" required></label>
+      <div class="field-row" style="margin-top:12px">
+        <label class="field">Bought on<input type="date" name="purchase_date" value="${today()}"></label>
+        <label class="field">Cost *<input type="number" step="0.01" min="0" name="cost" required></label>
+      </div>
+      <div class="field-row">
+        <label class="field">Value at end<input type="number" step="0.01" min="0" name="salvage" value="0"></label>
+        <label class="field">Useful life (months)<input type="number" min="1" name="life_months" value="60"></label>
+      </div>
+      <p class="muted" style="margin:0;font-size:12.5px">Cost less end value is spread evenly
+        over the months, charged to Depreciation each time you post it.</p>`,
+    submitLabel: "Add asset",
+    onSubmit: async (form) => {
+      await api("/assets", { method: "POST", body: formValues(form) });
+      toast("Asset added.", "success");
+      viewAssets();
+    },
+  });
+}
+
+async function reconcileModal(account) {
+  const data = await api(`/reports/reconcile/${account.id}`);
+  const body = `
+    <div class="stat-grid" style="margin-bottom:12px">
+      <div class="stat blue"><div class="label">Ledger balance</div>
+        <div class="value">${cur(data.ledger_balance)}</div></div>
+      <div class="stat green"><div class="label">Cleared</div>
+        <div class="value" id="rec-cleared">${cur(data.cleared_balance)}</div></div>
+      <div class="stat amber"><div class="label">Not yet cleared</div>
+        <div class="value" id="rec-unc">${cur(data.uncleared)}</div></div>
+    </div>
+    <p class="muted" style="margin:0 0 10px;font-size:12.5px">Tick each line that appears on
+      your bank or cash statement. When cleared matches the statement, you are reconciled.</p>
+    <div class="table-wrap"><table class="data"><thead><tr>
+      <th></th><th>Date</th><th>Entry</th><th>Detail</th>
+      <th class="num">In</th><th class="num">Out</th></tr></thead>
+      <tbody>${data.lines.map((l) => `<tr>
+        <td><input type="checkbox" data-line="${l.id}" ${l.cleared ? "checked" : ""}
+                   style="width:auto;margin:0"></td>
+        <td>${fmtDate(l.entry_date)}</td>
+        <td class="mono">${h(l.entry_no)}</td>
+        <td>${h(l.entry_memo)}</td>
+        <td class="num">${l.debit ? money(l.debit) : ""}</td>
+        <td class="num">${l.credit ? money(l.credit) : ""}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  const form = modal({ title: `Reconcile ${account.name}`, wide: true, body });
+  form.querySelectorAll("[data-line]").forEach((box) => {
+    box.addEventListener("change", async (e) => {
+      await api(`/journal/lines/${e.target.dataset.line}/clear`,
+                { method: "POST", body: { cleared: e.target.checked } });
+      const fresh = await api(`/reports/reconcile/${account.id}`);
+      $("#rec-cleared", form).textContent = cur(fresh.cleared_balance);
+      $("#rec-unc", form).textContent = cur(fresh.uncleared);
+    });
+  });
+}
+
 async function viewFinancials() {
   let tab = "profit-loss";
   let from = monthStart();
@@ -1936,6 +2093,27 @@ async function viewFinancials() {
     }
   }
 
+  if (state.user.role === "admin") {
+    pageAction("Close the Year", async () => {
+      const done = await api("/accounting/closings");
+      const last = done.length ? `Last closed to ${fmtDate(done[0].closed_to)}.` : "Never closed.";
+      modal({
+        title: "Close the year",
+        body: `<p style="margin-top:0">This sweeps income and expenses into Retained
+            Earnings, so the next year starts from zero and the profit stays on the
+            balance sheet. ${h(last)}</p>
+          <label class="field">Close up to<input type="date" name="to" value="${today()}"></label>
+          <label class="field" style="margin-top:12px">Type <strong>CLOSE</strong> to confirm
+            <input name="confirm" autocomplete="off" placeholder="CLOSE"></label>`,
+        submitLabel: "Close the year",
+        onSubmit: async (form) => {
+          const r = await api("/accounting/close", { method: "POST", body: formValues(form) });
+          toast(`Closed. ${cur(r.net_profit)} carried to retained earnings.`, "success");
+          refresh();
+        },
+      });
+    }, "btn");
+  }
   pageAction("Print", () => {
     el("print-root").innerHTML = `<div class="doc">
       <h2 style="color:var(--brand)">${h(state.company.name)}</h2>

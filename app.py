@@ -1709,6 +1709,188 @@ def account_ledger(ctx, account_id):
     return {"account": dict(account), "lines": lines, "closing": running}
 
 
+@route("GET", r"/api/reports/aging")
+def aging(ctx):
+    """Who owes us, and whom we owe, sorted by how overdue it is."""
+    ctx.require_user()
+    payable = ctx.query.get("kind") == "payable"
+    as_at = text(ctx.query.get("to"), today())
+    if payable:
+        sql = """SELECT p.purchase_no AS ref, p.purchase_date AS doc_date, s.name AS party,
+                        ROUND(p.total - p.paid, 2) AS outstanding
+                 FROM purchases p JOIN suppliers s ON s.id = p.supplier_id
+                 WHERE p.total - p.paid > 0.005 AND p.purchase_date <= ?"""
+    else:
+        sql = """SELECT i.invoice_no AS ref, i.invoice_date AS doc_date, c.name AS party,
+                        ROUND(i.total - i.paid, 2) AS outstanding
+                 FROM invoices i JOIN customers c ON c.id = i.customer_id
+                 WHERE i.total - i.paid > 0.005 AND i.invoice_date <= ?"""
+    docs = rows(ctx.conn.execute(sql + " ORDER BY doc_date", (as_at,)))
+
+    cutoff = datetime.strptime(as_at, "%Y-%m-%d")
+    buckets = {"current": 0.0, "d30": 0.0, "d60": 0.0, "d90": 0.0, "older": 0.0}
+    parties = {}
+    for doc in docs:
+        try:
+            age = (cutoff - datetime.strptime(doc["doc_date"], "%Y-%m-%d")).days
+        except ValueError:
+            age = 0
+        band = ("current" if age <= 0 else "d30" if age <= 30 else
+                "d60" if age <= 60 else "d90" if age <= 90 else "older")
+        doc["days"] = age
+        doc["band"] = band
+        buckets[band] = round(buckets[band] + doc["outstanding"], 2)
+        row = parties.setdefault(doc["party"], dict(party=doc["party"], total=0.0,
+                                                    **{k: 0.0 for k in buckets}))
+        row[band] = round(row[band] + doc["outstanding"], 2)
+        row["total"] = round(row["total"] + doc["outstanding"], 2)
+    return {"kind": "payable" if payable else "receivable", "to": as_at,
+            "documents": docs, "by_party": sorted(parties.values(),
+                                                  key=lambda r: -r["total"]),
+            "buckets": buckets,
+            "total": round(sum(buckets.values()), 2)}
+
+
+@route("GET", r"/api/reports/reconcile/(\d+)")
+def reconciliation(ctx, account_id):
+    """Tick postings off against a bank statement."""
+    ctx.require_user()
+    account = ctx.conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not account:
+        raise HttpError(404, "Account not found.")
+    as_at = text(ctx.query.get("to"), today())
+    lines = rows(ctx.conn.execute(
+        """SELECT l.id, l.debit, l.credit, l.cleared, l.cleared_date, l.memo,
+                  e.entry_no, e.entry_date, e.memo AS entry_memo, e.source
+           FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+           WHERE l.account_id = ? AND e.entry_date <= ?
+           ORDER BY e.entry_date, e.id""", (account_id, as_at)))
+    ledger = round(sum(l["debit"] - l["credit"] for l in lines), 2)
+    cleared = round(sum(l["debit"] - l["credit"] for l in lines if l["cleared"]), 2)
+    return {"account": dict(account), "to": as_at, "lines": lines,
+            "ledger_balance": ledger, "cleared_balance": cleared,
+            "uncleared": round(ledger - cleared, 2)}
+
+
+@route("POST", r"/api/journal/lines/(\d+)/clear")
+def clear_line(ctx, line_id):
+    ctx.require_user()
+    cleared = 1 if ctx.body.get("cleared", True) else 0
+    ctx.conn.execute("UPDATE journal_lines SET cleared = ?, cleared_date = ? WHERE id = ?",
+                     (cleared, today() if cleared else "", line_id))
+    ctx.conn.commit()
+    return {"ok": True, "cleared": bool(cleared)}
+
+
+@route("GET", r"/api/accounting/closings")
+def list_closings(ctx):
+    ctx.require_user()
+    return rows(ctx.conn.execute(
+        """SELECT c.*, e.entry_no FROM closings c
+           LEFT JOIN journal_entries e ON e.id = c.entry_id
+           ORDER BY c.closed_to DESC"""))
+
+
+@route("POST", r"/api/accounting/close")
+def close_year(ctx):
+    """Sweep income and expense into retained earnings, so the new year starts
+    from zero and the balance sheet carries the profit."""
+    ctx.require_admin()
+    to_date = text(ctx.body.get("to"), today()) or today()
+    if text(ctx.body.get("confirm")) != "CLOSE":
+        raise HttpError(400, "Type CLOSE to confirm.")
+    last = ctx.conn.execute(
+        "SELECT closed_to FROM closings ORDER BY closed_to DESC LIMIT 1").fetchone()
+    start = last["closed_to"] if last else None
+    if start and to_date <= start:
+        raise HttpError(400, f"The books are already closed to {start}.")
+
+    accounts = balances(ctx.conn, start, to_date)
+    lines, profit = [], 0.0
+    for a in accounts:
+        net = round(a["debit"] - a["credit"], 2)
+        if a["type"] not in ("Income", "Expense") or not net:
+            continue
+        # close the account by posting the opposite of its balance
+        lines.append((a["id"], -net if net < 0 else 0, net if net > 0 else 0,
+                      "Year-end close"))
+        profit = round(profit - net, 2)      # income is credit-negative, expense positive
+    if not lines:
+        raise HttpError(400, "There is nothing to close for this period.")
+    lines.append((account_id(ctx.conn, "3900"),
+                  0 if profit >= 0 else -profit, profit if profit >= 0 else 0,
+                  "Profit carried to retained earnings"))
+    entry_id = post(ctx.conn, to_date, f"Year-end close to {to_date}", lines, "Closing")
+    ctx.conn.execute(
+        "INSERT INTO closings (closed_to, entry_id, net_profit) VALUES (?,?,?)",
+        (to_date, entry_id, profit))
+    ctx.conn.commit()
+    return {"ok": True, "closed_to": to_date, "net_profit": profit, "entry_id": entry_id}
+
+
+@route("GET", r"/api/assets")
+def list_assets(ctx):
+    ctx.require_user()
+    return rows(ctx.conn.execute("SELECT * FROM fixed_assets ORDER BY purchase_date DESC"))
+
+
+@route("POST", r"/api/assets")
+def create_asset(ctx):
+    ctx.require_user()
+    name = text(ctx.body.get("name"))
+    cost = num(ctx.body.get("cost"))
+    life = int(num(ctx.body.get("life_months"), 60)) or 60
+    if not name or cost <= 0:
+        raise HttpError(400, "Give the asset a name and a cost above zero.")
+    cur = ctx.conn.execute(
+        """INSERT INTO fixed_assets (name, purchase_date, cost, salvage, life_months)
+           VALUES (?,?,?,?,?)""",
+        (name, text(ctx.body.get("purchase_date"), today()) or today(),
+         cost, num(ctx.body.get("salvage")), life))
+    ctx.conn.commit()
+    return {"id": cur.lastrowid}
+
+
+@route("DELETE", r"/api/assets/(\d+)")
+def delete_asset(ctx, asset_id):
+    ctx.require_user()
+    ctx.conn.execute("DELETE FROM fixed_assets WHERE id = ?", (asset_id,))
+    ctx.conn.commit()
+    return {"ok": True}
+
+
+@route("POST", r"/api/assets/depreciate")
+def run_depreciation(ctx):
+    """Post one month of straight-line depreciation for every asset due."""
+    ctx.require_user()
+    upto = text(ctx.body.get("to"), today()) or today()
+    posted, total = [], 0.0
+    for asset in ctx.conn.execute(
+            "SELECT * FROM fixed_assets WHERE active = 1").fetchall():
+        monthly = round((asset["cost"] - asset["salvage"]) / max(asset["life_months"], 1), 2)
+        if monthly <= 0:
+            continue
+        already = ctx.conn.execute(
+            """SELECT COALESCE(SUM(l.debit), 0) d FROM journal_lines l
+               JOIN journal_entries e ON e.id = l.entry_id
+               WHERE e.source = 'Depreciation' AND e.source_id = ?""",
+            (asset["id"],)).fetchone()["d"]
+        remaining = round(asset["cost"] - asset["salvage"] - already, 2)
+        if remaining <= 0:
+            continue
+        amount = min(monthly, remaining)
+        memo = f"Depreciation - {asset['name']}"
+        post(ctx.conn, upto, memo,
+             [(asset["expense_account"], amount, 0, memo),
+              ("1590", 0, amount, memo)], "Depreciation", asset["id"])
+        ctx.conn.execute("UPDATE fixed_assets SET depreciated_to = ? WHERE id = ?",
+                         (upto, asset["id"]))
+        posted.append({"asset": asset["name"], "amount": amount})
+        total = round(total + amount, 2)
+    ctx.conn.commit()
+    return {"posted": posted, "total": total}
+
+
 # --------------------------------------------------------------------------
 # Excel exports
 # --------------------------------------------------------------------------
