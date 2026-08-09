@@ -384,9 +384,30 @@ async function router() {
   try {
     await route.view(rest);
   } catch (err) {
-    el("content").innerHTML = `<div class="card"><div class="card-body">
-      <div class="form-error">${h(err.message)}</div></div></div>`;
+    el("content").innerHTML = err.offline ? offlinePanel() :
+      `<div class="card"><div class="card-body">
+        <div class="form-error">${h(err.message)}</div></div></div>`;
   }
+}
+
+/**
+ * Shown in place of a screen when the office cannot be reached. Every screen
+ * here reads live figures - stock, money owed, order status - and showing
+ * yesterday's numbers as though they were today's would be worse than showing
+ * none. So the app says what is happening and offers the part that does work.
+ */
+function offlinePanel() {
+  return `<div class="card"><div class="empty">
+    <div class="big">⚡</div>
+    <p><strong>No internet connection</strong><br>
+      <span class="muted">This screen needs live figures from the office,
+      so it cannot load right now. It will come back on its own once you
+      are connected.</span></p>
+    <div style="display:flex;gap:9px;justify-content:center;flex-wrap:wrap">
+      <button class="btn" onclick="location.reload()">Try again</button>
+      <a class="btn btn-primary" href="/field.html">Field Booking &mdash; works offline</a>
+    </div>
+  </div></div>`;
 }
 
 function pageAction(label, handler, kind) {
@@ -624,7 +645,7 @@ async function orderDetail(orderId) {
         const result = await api(`/orders/${orderId}/invoice`, { method: "POST", body: { invoice_date: today() } });
         toast("Invoice created.", "success");
         go("invoices/" + result.id);
-      } catch (err) { toast(err.message, "error"); }
+      } catch (err) { toast(err.offline ? "No connection - try again once you are online." : err.message, "error"); }
     });
   }
   if (!invoice) pageAction("Edit", () => go("orders/edit/" + orderId), "btn");
@@ -1627,6 +1648,16 @@ async function viewReports() {
   async function refresh() {
     const box = $("#report-body");
     box.innerHTML = `<div class="empty"><div class="big">⏳</div><p>Building report...</p></div>`;
+    try {
+      await buildReport(box);
+    } catch (err) {
+      box.innerHTML = err.offline ? offlinePanel()
+        : `<div class="card"><div class="card-body">
+             <div class="form-error">${h(err.message)}</div></div></div>`;
+    }
+  }
+
+  async function buildReport(box) {
     if (tab === "sales") {
       const r = await api(`/reports/sales?from=${from}&to=${to}`);
       box.innerHTML = `
@@ -2079,6 +2110,7 @@ async function showApp(user) {
   el("login-screen").classList.add("hidden");
   el("app").classList.remove("hidden");
   buildNav();
+  showConnectionBanner();
   if (!location.hash) location.hash = "#/dashboard";
   router();
   pingAppwrite();
@@ -2123,11 +2155,20 @@ document.addEventListener("keydown", (e) => {
   if (el("modal-root").innerHTML) closeModal(); else toggleNav(false);
 });
 window.addEventListener("hashchange", () => { if (state.user) router(); });
-window.addEventListener("offline", () => { if (!state.user) setOfflineNotice(true); });
+function showConnectionBanner() {
+  const bar = el("net-banner");
+  if (!bar) return;
+  bar.classList.toggle("hidden", navigator.onLine);
+}
+window.addEventListener("offline", () => {
+  showConnectionBanner();
+  if (!state.user) setOfflineNotice(true);
+});
 window.addEventListener("online", () => {
-  if (state.user) return;
+  showConnectionBanner();
+  if (state.user) { router(); return; }   // reload the screen now data is reachable
   setOfflineNotice(false);
-  location.reload();          // the server is back; start cleanly
+  location.reload();
 });
 
 // Any table rendered into the page or a modal gets its cells labelled.
