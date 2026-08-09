@@ -301,10 +301,11 @@ CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
 # other projects, and "public" is where names collide.
 PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 
-# Bumped whenever tables are added. A serverless instance uses this to notice
-# that its database predates the current code; checking for one known table is
-# not enough, because that table exists happily while newer ones are missing.
-SCHEMA_VERSION = "3"
+# Bumped whenever tables OR seeded rows change. A serverless instance uses this
+# to notice that its database predates the current code. Checking for one known
+# table is not enough - that table exists happily while newer ones are missing -
+# and neither is checking tables alone, since new chart accounts are data.
+SCHEMA_VERSION = "4"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
