@@ -75,6 +75,7 @@ function toast(message, kindName) {
 
 function applyCatalogue(data) {
   catalogue = data;
+  (catalogue.products || []).sort((a, b) => String(a.sku).localeCompare(String(b.sku)));
   $("company").textContent = data.company || "Usman Traders & Suppliers";
   const names = kind === "Purchase" ? data.suppliers : data.customers;
   $("party-list").innerHTML = (names || []).map((n) => `<option value="${h(n)}">`).join("");
@@ -101,6 +102,11 @@ async function loadCatalogue() {
 
 function renderLines() {
   if (!lines.length) lines = [{ sku: "", qty: 1, price: 0 }];
+  const empty = !(catalogue.products || []).length;
+  $("no-items").classList.toggle("hidden", !empty);
+  $("lines").classList.toggle("hidden", empty);
+  $("add-line").classList.toggle("hidden", empty);
+  if (empty) { $("total").textContent = money(0); return; }
   const options = catalogue.products.map((p) =>
     `<option value="${h(p.sku)}">${h(p.sku)} - ${h(p.name)}</option>`).join("");
 
@@ -370,13 +376,14 @@ $("install-btn").addEventListener("click", async () => {
 });
 window.addEventListener("appinstalled", () => $("install-bar").classList.add("hidden"));
 
-// Long-press the header to re-enter the access code.
-let holdTimer;
-document.querySelector("header").addEventListener("pointerdown", () => {
-  holdTimer = setTimeout(() => askForToken("Change the access code for this phone."), 1200);
+$("code-btn").addEventListener("click", () => {
+  codeAsked = false;
+  askForToken("Enter the access code given to you by the office.");
 });
-["pointerup", "pointerleave"].forEach((ev) =>
-  document.querySelector("header").addEventListener(ev, () => clearTimeout(holdTimer)));
+$("enter-code").addEventListener("click", () => {
+  codeAsked = false;
+  askForToken("Enter the access code given to you by the office.");
+});
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => {
