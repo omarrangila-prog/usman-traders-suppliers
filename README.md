@@ -9,6 +9,16 @@ needed, all data stays in one file on your machine.
 
 ---
 
+## Desktop version
+
+Double-click **`Usman Traders.desktop`** (Linux) or **`Usman Traders.bat`**
+(Windows) and it opens in its own window — no browser bar, nothing to type. It
+starts the server, opens the window, and shuts down when you close it.
+
+Everything runs on that computer, so it works with no internet: the data sits in
+`usmantraders.db` beside the program. Set `DATABASE_URL` first if you would
+rather the desktop copy shared the cloud database with the phones.
+
 ## Running it
 
 ```bash
@@ -81,7 +91,20 @@ by updates.
 
 ### How stock moves
 
-This is the one rule worth knowing:
+Nothing is calculated by hand. Enter the transaction and the stock follows:
+
+| You do this | Stock does this |
+|---|---|
+| Record a purchase | Goes **up** by the quantity bought |
+| Mark an order **Delivered** | Goes **down** — that is when goods leave |
+| Save a counter-sale invoice | Goes **down** immediately |
+| Delete any of the above | Reverses itself |
+
+The status (In Stock / Low Stock / Out of Stock) follows the quantity against
+each item's reorder level, with no action from you. Every change is written to
+the movement ledger, and the ledger always sums to the stock on hand.
+
+The detail:
 
 - Recording a purchase as **Received** → stock **goes up**.
 - Marking an order **Delivered** → stock **goes down**.

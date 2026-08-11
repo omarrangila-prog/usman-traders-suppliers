@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Usman Traders & Suppliers
+Comment=Orders, invoicing, purchases, inventory and accounting
+Exec=python3 "/home/synthor/Projects/UsmanTraders/desktop.py"
+Path=/home/synthor/Projects/UsmanTraders
+Icon=/home/synthor/Projects/UsmanTraders/static/icon-512.png
+Terminal=false
+Categories=Office;Finance;
