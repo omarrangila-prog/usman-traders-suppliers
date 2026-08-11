@@ -9,7 +9,22 @@ needed, all data stays in one file on your machine.
 
 ---
 
-## Desktop version
+## Windows program (.exe)
+
+A single **UsmanTraders.exe** — no Python, no install. Download it from
+GitHub: **Actions → Build Windows exe → newest run → Artifacts →
+UsmanTraders-windows**. Unzip it, put the .exe wherever you like, and
+double-click.
+
+Your data is written to `usmantraders.db` **beside the .exe**, so keep the two
+together and back that file up. If it ever refuses to start it writes
+`startup-error.log` next to itself saying why.
+
+A fresh build is produced on GitHub's Windows machines from the current code,
+and the build refuses to publish unless the .exe actually starts and serves the
+app.
+
+## Desktop version (Linux / Mac)
 
 Double-click **`Usman Traders.desktop`** (Linux) or **`Usman Traders.bat`**
 (Windows) and it opens in its own window — no browser bar, nothing to type. It
