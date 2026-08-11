@@ -138,4 +138,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # A frozen build has no console, so a crash would otherwise be silent.
+        # Leave a note beside the program saying what went wrong.
+        import traceback
+        report = os.path.join(BASE_DIR, "startup-error.log")
+        try:
+            with open(report, "w", encoding="utf-8") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        traceback.print_exc()
+        raise

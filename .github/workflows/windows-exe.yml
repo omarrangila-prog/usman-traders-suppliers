@@ -44,7 +44,7 @@ jobs:
         run: |
           $env:UT_LOGIN = "off"
           $env:UT_NO_WINDOW = "1"
-          $p = Start-Process -FilePath dist/UsmanTraders.exe -PassThru
+          $p = Start-Process -FilePath dist/UsmanTraders.exe -PassThru -RedirectStandardOutput out.txt -RedirectStandardError err.txt
           Start-Sleep -Seconds 30
           $ok = $false
           foreach ($port in 8000..8003) {
@@ -60,7 +60,14 @@ jobs:
           Get-Process msedge, chrome, chromium -ErrorAction SilentlyContinue |
             Where-Object { $_.MainWindowTitle -like "*Usman*" } |
             Stop-Process -Force -ErrorAction SilentlyContinue
-          if (-not $ok) { throw "the exe started but never served the app" }
+          if (-not $ok) {
+            Write-Host "--- stdout ---"; if (Test-Path out.txt) { Get-Content out.txt }
+            Write-Host "--- stderr ---"; if (Test-Path err.txt) { Get-Content err.txt }
+            Write-Host "--- startup-error.log ---"
+            Get-ChildItem -Recurse -Filter startup-error.log |
+              ForEach-Object { Get-Content $_.FullName }
+            throw "the exe started but never served the app"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
