@@ -25,7 +25,7 @@ jobs:
         run: >
           pyinstaller --onefile --noconsole
           --name "UsmanTraders"
-          --icon static/icon-512.png
+          --icon static/icon.ico
           --add-data "static;static"
           --hidden-import app --hidden-import db --hidden-import xlsx
           --hidden-import appwrite_client
