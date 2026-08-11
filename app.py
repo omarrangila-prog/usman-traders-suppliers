@@ -21,8 +21,11 @@ import appwrite_client
 import db
 import xlsx
 
+# Frozen builds unpack their files to a temporary directory (sys._MEIPASS);
+# a normal run just uses the source folder.
+BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_DIR = os.path.join(BUNDLE_DIR, "static")
 SESSION_HOURS = db.SESSION_HOURS
 MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 

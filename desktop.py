@@ -23,7 +23,9 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = (os.path.dirname(os.path.abspath(sys.executable))
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 import app as application  # noqa: E402

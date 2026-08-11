@@ -1,0 +1,68 @@
+name: Build Windows exe
+
+# A Windows .exe has to be built on Windows - PyInstaller does not
+# cross-compile - so GitHub's Windows runner does it and attaches the result
+# for download.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tool
+        run: pip install pyinstaller==6.11.1
+
+      - name: Build the executable
+        run: >
+          pyinstaller --onefile --noconsole
+          --name "UsmanTraders"
+          --icon static/icon-512.png
+          --add-data "static;static"
+          --hidden-import app --hidden-import db --hidden-import xlsx
+          --hidden-import appwrite_client
+          desktop.py
+
+      - name: Check it produced something runnable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/UsmanTraders.exe)) { throw "exe was not produced" }
+          $size = (Get-Item dist/UsmanTraders.exe).Length / 1MB
+          Write-Host ("built UsmanTraders.exe  {0:N1} MB" -f $size)
+          if ($size -lt 5) { throw "exe looks too small to contain the app" }
+
+      - name: Smoke test - does it actually serve the app?
+        shell: pwsh
+        run: |
+          $env:UT_LOGIN = "off"
+          $p = Start-Process -FilePath dist/UsmanTraders.exe -PassThru
+          Start-Sleep -Seconds 25
+          $ok = $false
+          foreach ($port in 8000..8003) {
+            try {
+              $r = Invoke-WebRequest "http://127.0.0.1:$port/api/health" -TimeoutSec 5 -UseBasicParsing
+              if ($r.StatusCode -eq 200) {
+                Write-Host "responded on port $port : $($r.Content)"
+                $ok = $true; break
+              }
+            } catch { }
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Process msedge, chrome, chromium -ErrorAction SilentlyContinue |
+            Where-Object { $_.MainWindowTitle -like "*Usman*" } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "the exe started but never served the app" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UsmanTraders-windows
+          path: dist/UsmanTraders.exe
+          retention-days: 90

@@ -17,9 +17,22 @@ IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 # a lie, and a warning nobody can trust is worse than none.
 DEMO_MODE = bool(os.environ.get("VERCEL")) and not IS_POSTGRES
 
+def _data_dir():
+    """Where the database belongs: beside the program the user runs. For a
+    frozen .exe that is the folder holding the .exe, not the temporary folder
+    its code was unpacked into."""
+    import sys
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+LOGO_DIR = getattr(__import__("sys"), "_MEIPASS",
+                   os.path.dirname(os.path.abspath(__file__)))
+
 DB_PATH = os.environ.get("UT_DB") or (
     "/tmp/usmantraders.db" if DEMO_MODE
-    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "usmantraders.db")
+    else os.path.join(_data_dir(), "usmantraders.db")
 )
 
 SCHEMA = """
@@ -595,7 +608,7 @@ PLACEHOLDER_LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 </svg>"""
 
 
-LOGO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
+LOGO_FILE = os.path.join(LOGO_DIR, "static", "logo.png")
 
 
 def placeholder_logo():
