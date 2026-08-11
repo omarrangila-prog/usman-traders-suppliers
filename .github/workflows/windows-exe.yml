@@ -43,8 +43,9 @@ jobs:
         shell: pwsh
         run: |
           $env:UT_LOGIN = "off"
+          $env:UT_NO_WINDOW = "1"
           $p = Start-Process -FilePath dist/UsmanTraders.exe -PassThru
-          Start-Sleep -Seconds 25
+          Start-Sleep -Seconds 30
           $ok = $false
           foreach ($port in 8000..8003) {
             try {

@@ -89,6 +89,15 @@ def main():
     if not wait_until_ready(port):
         raise SystemExit("The server did not start. Check the messages above.")
 
+    if "--no-window" in sys.argv or os.environ.get("UT_NO_WINDOW"):
+        print("  Running without a window. Press Ctrl+C to stop.\n")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        return
+
     browser = find_browser()
     if not browser:
         import webbrowser
@@ -103,6 +112,7 @@ def main():
 
     # A separate profile keeps the app window free of other tabs and extensions.
     profile = os.path.join(BASE_DIR, ".desktop-profile")
+    started = time.time()
     window = subprocess.Popen([
         browser, f"--app={url}", f"--user-data-dir={profile}",
         "--window-size=1280,860", "--no-first-run", "--no-default-browser-check",
@@ -111,6 +121,15 @@ def main():
     print("  Window open. Close it to shut the software down.\n")
     try:
         window.wait()
+        # A window that dies at once did not really open - a missing profile,
+        # a browser policy, an already-running instance. Shutting the server
+        # down here would look to the user like the program simply failed.
+        if time.time() - started < 3:
+            import webbrowser
+            print("  The app window would not open; using your default browser instead.\n")
+            webbrowser.open(url)
+            while True:
+                time.sleep(1)
     except KeyboardInterrupt:
         window.terminate()
     finally:
