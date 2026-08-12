@@ -194,6 +194,93 @@ check("field entry visible to the office", any(
 call("DELETE", f"/field/entries/{listed[0]['id']}")
 check("field entry can be deleted", True)
 
+print("\n== everything else the app can do ==")
+health = call("GET", "/health")
+check("health reports storage and mode", health["ok"] and "storage" in health, health)
+check("branding readable before sign-in", "name" in call("GET", "/branding"))
+dash = call("GET", "/dashboard")
+check("dashboard totals present",
+      {"sales_month", "purchases_month", "receivables", "payables", "stock_value"}
+      <= set(dash), sorted(dash))
+check("sales report", "summary" in call("GET", "/reports/sales?from=2026-08-01&to=2026-08-31"))
+check("purchase report", "summary" in call("GET", "/reports/purchases?from=2026-08-01&to=2026-08-31"))
+check("inventory report", "summary" in call("GET", "/reports/inventory"))
+
+req = urllib.request.Request(f"{BASE}/products/export",
+                             headers={"Cookie": "; ".join(f"{k}={v}" for k, v in COOKIE.items())})
+blob = urllib.request.urlopen(req, timeout=60).read()
+check("item master exports to Excel", blob[:2] == b"PK" and len(blob) > 2000, len(blob))
+
+# a purchase left unreceived should not move stock until it is received
+held = stock_of("00006")
+later = call("POST", "/purchases", {"supplier_id": supp["id"], "purchase_date": "2026-08-09",
+    "status": "Ordered", "tax": 0,
+    "items": [{"product_id": item["id"], "qty": 15, "price": 7}]})
+check("an unreceived purchase leaves stock alone", stock_of("00006") == held)
+call("POST", f"/purchases/{later['id']}/receive")
+check("receiving it adds the stock", stock_of("00006") == held + 15)
+call("POST", f"/purchases/{later['id']}/payment", {"amount": 50})
+check("supplier payment recorded",
+      any(p["id"] == later["id"] and p["paid"] == 50 for p in call("GET", "/purchases")))
+check("books balance after receiving and paying", books_balance())
+
+# editing an order should re-price and re-stock correctly
+edit = call("POST", "/orders", {"customer_id": cust["id"], "order_date": "2026-08-09", "tax": 0,
+    "items": [{"product_id": item["id"], "qty": 5, "price": 10}]})
+call("PUT", f"/orders/{edit['id']}", {"customer_id": cust["id"], "order_date": "2026-08-09",
+    "tax": 0, "items": [{"product_id": item["id"], "qty": 8, "price": 12}]})
+edited = call("GET", f"/orders/{edit['id']}")["order"]
+check("an order can be edited", edited["total"] == 96, edited["total"])
+call("DELETE", f"/orders/{edit['id']}")
+
+# a field booking should become a real order
+call("POST", "/field/sync", {"device": "t", "entries": [{"client_id": "conv-1",
+     "kind": "Booking", "party_name": "Field Convert Shop",
+     "items": [{"sku": "00006", "qty": 4, "price": 11}]}]})
+pending = [e for e in call("GET", "/field/entries") if e["client_id"] == "conv-1"][0]
+converted = call("POST", f"/field/entries/{pending['id']}/convert")
+check("field booking becomes an order", converted.get("number", "").startswith("ORD"), converted)
+check("the shop was created as a customer",
+      any(c["name"] == "Field Convert Shop" for c in call("GET", "/customers")))
+call("POST", "/field/sync", {"device": "t", "entries": [{"client_id": "rej-1",
+     "kind": "Booking", "party_name": "Rejected Shop",
+     "items": [{"sku": "00006", "qty": 1, "price": 10}]}]})
+rej = [e for e in call("GET", "/field/entries") if e["client_id"] == "rej-1"][0]
+call("POST", f"/field/entries/{rej['id']}/reject")
+check("a field entry can be rejected",
+      [e for e in call("GET", "/field/entries") if e["client_id"] == "rej-1"][0]["status"]
+      == "Rejected")
+
+check("customer account ledger",
+      "invoices" in call("GET", f"/customers/{cust['id']}/ledger"))
+company = call("GET", "/company")
+call("PUT", "/company", dict(company, phone="021-99999999"))
+check("company profile saves", call("GET", "/company")["phone"] == "021-99999999")
+
+cash = [a for a in call("GET", "/accounts") if a["is_cash"]][0]
+rec = call("GET", f"/reports/reconcile/{cash['id']}")
+check("reconciliation lists cash postings", "ledger_balance" in rec and rec["lines"], rec.keys())
+if rec["lines"]:
+    call("POST", f"/journal/lines/{rec['lines'][0]['id']}/clear", {"cleared": True})
+    after = call("GET", f"/reports/reconcile/{cash['id']}")
+    check("a line can be ticked as cleared", after["cleared_balance"] != 0, after["cleared_balance"])
+
+req = urllib.request.Request(f"{BASE}/backup",
+                             headers={"Cookie": "; ".join(f"{k}={v}" for k, v in COOKIE.items())})
+backup = urllib.request.urlopen(req, timeout=60).read()
+check("database backup downloads", backup[:15].startswith(b"SQLite format"), backup[:15])
+
+profit = call("GET", "/reports/profit-loss?from=2026-01-01&to=2026-12-31")["net_profit"]
+closed = call("POST", "/accounting/close", {"to": "2026-12-31", "confirm": "CLOSE"})
+check("year-end close sweeps the profit", abs(closed["net_profit"] - profit) < 0.01,
+      (closed.get("net_profit"), profit))
+check("profit and loss resets after closing",
+      abs(call("GET", "/reports/profit-loss?from=2026-01-01&to=2026-12-31")["net_profit"]) < 0.01)
+check("balance sheet still balances after closing", books_balance())
+check("closings are recorded", len(call("GET", "/accounting/closings")) == 1)
+call("POST", "/accounting/close", {"to": "2026-12-31", "confirm": "CLOSE"}, expect=400)
+check("the same period cannot be closed twice", True)
+
 print("\n== guards ==")
 call("POST", "/orders", {"customer_id": cust["id"], "items": []}, expect=400)
 check("empty order rejected", True)
@@ -224,6 +311,34 @@ if not OPEN_MODE:
     call("POST", "/logout")
     call("GET", "/products", expect=401)
     check("logout ends session", True)
+
+print("\n== bulk delete and password ==")
+# the roles section signs out on purpose, so sign back in before continuing
+if not OPEN_MODE:
+    call("POST", "/login", {"username": "admin", "password": "admin123"})
+call("POST", "/danger/clear", {"scope": "transactions", "confirm": "DELETE"})
+check("clearing transactions empties the documents",
+      not call("GET", "/orders") and not call("GET", "/invoices")
+      and not call("GET", "/purchases"))
+check("but keeps the item master", len(call("GET", "/products")) == 64)
+call("POST", "/danger/clear", {"scope": "everything", "confirm": "DELETE"})
+check("clearing everything reseeds the item master", len(call("GET", "/products")) == 64)
+check("and removes the contacts", not call("GET", "/customers"))
+call("POST", "/danger/clear", {"scope": "everything", "confirm": "no"}, expect=400)
+check("bulk delete refuses without confirmation", True)
+
+if not OPEN_MODE:
+    call("POST", "/me/password", {"current_password": "wrong", "new_password": "abcdef"},
+         expect=400)
+    check("password change refuses a wrong current password", True)
+    call("POST", "/me/password", {"current_password": "admin123", "new_password": "newpass123"})
+    COOKIE.clear()
+    call("POST", "/login", {"username": "admin", "password": "admin123"}, expect=401)
+    check("the old password stops working", True)
+    signed = call("POST", "/login", {"username": "admin", "password": "newpass123"})
+    check("the new password works", signed.get("user", {}).get("username") == "admin")
+    call("POST", "/me/password", {"current_password": "newpass123", "new_password": "admin123"})
+    check("password changed back", True)
 
 print("\n" + "=" * 60)
 print("ALL CHECKS PASSED" if not fails else f"{len(fails)} FAILURE(S):\n  " + "\n  ".join(fails))
