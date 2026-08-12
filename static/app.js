@@ -992,6 +992,7 @@ async function invoiceDetail(invoiceId) {
 
   pageAction("Print / PDF", () => {
     el("print-root").innerHTML = invoiceDocument(invoice, items, company);
+    fitToOnePage(el("print-root"));
     window.print();
   });
   if (invoice.total > invoice.paid) {
@@ -1021,8 +1022,46 @@ async function invoiceDetail(invoiceId) {
   }
 }
 
+/**
+ * Guarantees one page. The density classes get the document close; this
+ * measures what they actually produced at A4 width and scales the result so it
+ * lands inside a single sheet however many lines there are. Measuring is the
+ * only reliable way - a long item description or a long shop name changes the
+ * height as much as the row count does.
+ */
+const A4_CONTENT_WIDTH = 703;   // 210mm - 12mm margins, at 96dpi
+const A4_CONTENT_HEIGHT = 1032; // 297mm - 12mm margins
+
+function fitToOnePage(root) {
+  const doc = root.querySelector(".doc");
+  if (!doc) return;
+  doc.style.zoom = "";
+  // measure off-screen at the real paper width, then hide it again
+  const previous = root.getAttribute("style") || "";
+  root.setAttribute("style",
+    "display:block;position:fixed;left:-10000px;top:0;width:" + A4_CONTENT_WIDTH + "px");
+  const height = doc.getBoundingClientRect().height;
+  root.setAttribute("style", previous);
+  // Aim at 94% of the sheet. Measuring here and printing later are not
+  // identical - the print engine rounds, and fonts hint differently at print
+  // resolution - so a document measured at exactly one page still spills.
+  // The headroom costs a little white space and removes the second sheet.
+  const target = A4_CONTENT_HEIGHT * 0.94;
+  if (height > target) {
+    doc.style.zoom = (target / height).toFixed(4);
+  }
+}
+
+function invoiceDensity(count) {
+  if (count <= 4) return " doc-short";   // a two-line bill should not fill a sheet
+  if (count <= 8) return "";
+  if (count <= 14) return " doc-tight";
+  if (count <= 28) return " doc-dense";
+  return " doc-packed";                  // as small as stays readable
+}
+
 function invoiceDocument(invoice, items, company) {
-  return `<div class="doc">
+  return `<div class="doc${invoiceDensity(items.length)}">
     <div class="doc-head">
       ${company.logo ? `<img class="doc-logo" src="${h(company.logo)}" alt="">` : ""}
       <div class="doc-company">
