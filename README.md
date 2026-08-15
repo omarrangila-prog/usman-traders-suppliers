@@ -229,18 +229,15 @@ Any of these gives you HTTPS:
 ```bash
 UT_LOGIN=on                  # default; 'off' removes the login screen
 UT_SECRET=<long random>      # required if more than one server process
-UT_FIELD_TOKEN=<code>        # the access code the field phones use
 DATABASE_URL=postgresql://...        # optional; SQLite is used when unset
 ```
 
-`GET /api/health` reports storage engine, login mode and token state for uptime
-checks.
+`GET /api/health` reports the storage engine and login mode for uptime checks.
 
 ### Before handing it to a client
 
 - [ ] Serve over HTTPS
 - [ ] Change the `admin` password
-- [ ] Set `UT_FIELD_TOKEN` to something private
 - [ ] Set `UT_SECRET`
 - [ ] Schedule a copy of `usmantraders.db` somewhere off the machine
 

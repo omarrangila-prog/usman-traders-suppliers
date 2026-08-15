@@ -12,7 +12,6 @@ const $ = (id) => document.getElementById(id);
 const QUEUE_KEY = "utf_queue";
 const CACHE_KEY = "utf_cache";
 const DEVICE_KEY = "utf_device";
-const TOKEN_KEY = "utf_token";
 
 let catalogue = { products: [], customers: [], suppliers: [], company: "" };
 let kind = "Booking";
@@ -25,32 +24,6 @@ function uuid() {
     const r = (Math.random() * 16) | 0;
     return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
   });
-}
-
-const token = () => localStorage.getItem(TOKEN_KEY) || "";
-
-/* An in-page sheet rather than window.prompt: prompt() blocks the page while
-   it is open, and installed PWAs often suppress it outright. */
-let codeAsked = false;
-function revealCodeControls() {
-  $("code-btn").classList.remove("hidden");
-  $("enter-code").classList.remove("hidden");
-  $("no-items-why").textContent =
-    "This phone needs the access code from the office before it can load the item list.";
-}
-
-function askForToken(reason) {
-  revealCodeControls();
-  if (codeAsked) return;
-  codeAsked = true;
-  if (reason) $("code-why").textContent = reason;
-  $("code-input").value = token();
-  $("code-sheet").classList.remove("hidden");
-  setTimeout(() => $("code-input").focus(), 50);
-}
-function closeTokenSheet() {
-  $("code-sheet").classList.add("hidden");
-  codeAsked = false;
 }
 
 function device() {
@@ -119,10 +92,7 @@ async function loadCatalogue() {
   const cached = localStorage.getItem(CACHE_KEY);
   if (cached) { try { applyCatalogue(JSON.parse(cached)); } catch (_) { /* ignore */ } }
   try {
-    const res = await fetch("/api/field/bootstrap", { cache: "no-store",
-      headers: token() ? { "X-Field-Token": token() } : {} });
-    if (res.status === 401 || res.status === 403) { askForToken(); return; }
-    // no code needed on this server - keep those controls out of the way
+    const res = await fetch("/api/field/bootstrap", { cache: "no-store" });
     if (!res.ok) return;
     const data = await res.json();
     localStorage.setItem(CACHE_KEY, JSON.stringify(data));
@@ -277,17 +247,12 @@ async function sync() {
     const bail = setTimeout(() => controller.abort(), 20000);   // dead-air connections
     const res = await fetch("/api/field/sync", {
       method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" },
-                             token() ? { "X-Field-Token": token() } : {}),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device: device(), entries: waiting }),
       signal: controller.signal,
     });
     clearTimeout(bail);
 
-    if (res.status === 401 || res.status === 403) {
-      askForToken("This device needs the access code from the office.");
-      throw new Error("not authorised");
-    }
     // A captive portal answers 200 with a login page, not our JSON.
     const type = res.headers.get("content-type") || "";
     if (!res.ok || !type.includes("application/json")) {
@@ -383,15 +348,6 @@ $("clear").addEventListener("click", () => {
   renderLines();
 });
 
-$("code-save").addEventListener("click", () => {
-  localStorage.setItem(TOKEN_KEY, $("code-input").value.trim());
-  closeTokenSheet();
-  toast("Access code saved.", "ok");
-  loadCatalogue();
-  sync();
-});
-$("code-cancel").addEventListener("click", closeTokenSheet);
-
 window.addEventListener("online", showNetwork);
 window.addEventListener("offline", showNetwork);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
@@ -418,15 +374,6 @@ $("install-btn").addEventListener("click", async () => {
   $("install-bar").classList.add("hidden");
 });
 window.addEventListener("appinstalled", () => $("install-bar").classList.add("hidden"));
-
-$("code-btn").addEventListener("click", () => {
-  codeAsked = false;
-  askForToken("Enter the access code given to you by the office.");
-});
-$("enter-code").addEventListener("click", () => {
-  codeAsked = false;
-  askForToken("Enter the access code given to you by the office.");
-});
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").then((reg) => {

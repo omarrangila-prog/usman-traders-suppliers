@@ -34,11 +34,6 @@ MAX_BODY = 8 * 1024 * 1024  # 8 MB, enough for a base64 logo upload
 # anyone with the address can read and change everything.
 LOGIN_REQUIRED = os.environ.get("UT_LOGIN", "on").lower() not in ("0", "off", "false", "no")
 
-# The field phones authenticate with this shared token instead of a login, so
-# the buyer never handles an admin password. Unset means the field endpoints
-# fall back to requiring a normal session.
-FIELD_TOKEN = os.environ.get("UT_FIELD_TOKEN", "")
-
 ROUTES = []
 
 
@@ -210,7 +205,7 @@ COMPANY_FIELDS = ["name", "tagline", "logo", "address", "city", "phone",
 def health(ctx):
     ctx.conn.execute("SELECT 1").fetchone()
     return {"ok": True, "time": now_iso(), "storage": "postgres" if db.IS_POSTGRES else "sqlite",
-            "login_required": LOGIN_REQUIRED, "field_token_set": bool(FIELD_TOKEN)}
+            "login_required": LOGIN_REQUIRED}
 
 
 @route("GET", r"/api/branding")
@@ -1330,8 +1325,11 @@ def purge_purchase(conn, purchase_id):
 
 @route("GET", r"/api/field/bootstrap")
 def field_bootstrap(ctx):
-    """Everything the phone caches so the form still works with no signal."""
-    ctx.require_field_access()
+    """Everything the phone caches so the form still works with no signal.
+
+    Open deliberately: the booking form must work for a buyer holding a phone
+    in a shop with no setup at all. It exposes the item list and takes
+    bookings; it cannot read orders, invoices, customers or the accounts."""
     return {
         "company": company_name(ctx.conn),
         "products": rows(ctx.conn.execute(
@@ -1349,7 +1347,6 @@ def field_bootstrap(ctx):
 def field_sync(ctx):
     """Accept a batch queued on a phone. Safe to call repeatedly: an entry
     already stored is acknowledged rather than inserted again."""
-    ctx.require_field_access()
     entries = ctx.body.get("entries")
     if not isinstance(entries, list):
         raise HttpError(400, "Expected a list of entries.")
@@ -2132,10 +2129,9 @@ def download_backup(ctx):
 # --------------------------------------------------------------------------
 
 class Context:
-    def __init__(self, conn, body, query, token, user, field_token=""):
+    def __init__(self, conn, body, query, token, user):
         self.conn, self.body, self.query = conn, body, query
         self.token, self.user = token, user
-        self.field_token = field_token
         self.set_cookie = None
         self.clear_cookie = False
 
@@ -2148,16 +2144,6 @@ class Context:
         if self.user["role"] != "admin":
             raise HttpError(403, "This action requires an administrator account.")
 
-    def require_field_access(self):
-        """Open unless a code has been configured; then a signed-in user or a
-        phone presenting that code."""
-        if not FIELD_TOKEN:
-            return
-        if self.user:
-            return
-        if hmac.compare_digest(self.field_token or "", FIELD_TOKEN):
-            return
-        raise HttpError(401, "This device is not authorised for field entry.")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2236,8 +2222,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_body() if method in ("POST", "PUT", "DELETE") else {}
             query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
             token, user = self.current_session(conn)
-            ctx = Context(conn, body, query, token, user,
-                          self.headers.get("X-Field-Token", ""))
+            ctx = Context(conn, body, query, token, user)
 
             for verb, pattern, handler in ROUTES:
                 if verb != method:

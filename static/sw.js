@@ -11,7 +11,7 @@
  *     actively harmful. Offline API calls fail, and the pages handle that -
  *     the field form queues its entries locally.
  */
-const VERSION = "utf-v11";
+const VERSION = "utf-v12";
 const SHELL = [
   "/", "/index.html", "/app.js", "/styles.css",
   "/field.html", "/field.js",

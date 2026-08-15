@@ -92,16 +92,6 @@ textarea{min-height:64px;resize:vertical;}
 .toast.ok{background:#12995a;}
 .toast.err{background:var(--brand);}
 
-.sheet{position:fixed;inset:0;background:rgba(16,22,34,.55);z-index:60;
-  display:flex;align-items:center;justify-content:center;padding:20px;}
-.sheet .box{background:#fff;border-radius:14px;padding:20px;width:100%;max-width:360px;
-  box-shadow:0 20px 50px rgba(0,0,0,.3);}
-.sheet h3{margin:0 0 6px;font-size:16px;}
-.sheet p{margin:0 0 14px;font-size:13px;color:var(--ink-3);line-height:1.5;}
-.sheet .row{display:flex;gap:9px;margin-top:14px;}
-.sheet .row button{flex:1;padding:13px;border-radius:10px;font-weight:700;font-size:14px;
-  border:1px solid var(--line);background:#fff;font-family:inherit;}
-.sheet .row .go{background:var(--brand);border-color:var(--brand);color:#fff;}
 </style>
 </head>
 <body>
@@ -113,9 +103,6 @@ textarea{min-height:64px;resize:vertical;}
     <span id="company">Usman Traders &amp; Suppliers</span>
   </div>
   <div class="net" id="net"><span class="dot"></span><span id="net-text">Online</span></div>
-  <button id="code-btn" class="hidden" title="Access code" aria-label="Access code"
-    style="border:0;background:rgba(255,255,255,.18);color:#fff;border-radius:8px;
-           padding:7px 9px;font-size:15px;line-height:1;margin-right:-2px">&#9881;</button>
 </header>
 
 <div class="bar hidden" id="install-bar" style="background:#e8f1fc;color:#10529c;border-bottom:1px solid #cbe0f7">
@@ -155,13 +142,8 @@ textarea{min-height:64px;resize:vertical;}
       <strong style="display:block;color:#a35c00;font-size:13.5px;margin-bottom:4px">
         No items loaded</strong>
       <p style="margin:0 0 11px;font-size:12.5px;color:#454b54;line-height:1.5">
-        <span id="no-items-why">The item list has not reached this phone yet.
-        Open the form once with internet and it is kept on the device from then
-        on.</span></p>
-      <button id="enter-code" class="hidden" type="button"
-              style="width:100%;padding:11px;border-radius:9px;border:1px solid #c1121f;
-                     background:#c1121f;color:#fff;font-weight:700;font-family:inherit">
-        Enter access code</button>
+        The item list has not reached this phone yet. Open the form once with
+        internet and it is kept on the device from then on.</p>
     </div>
     <div id="lines"></div>
     <button class="add" id="add-line">+ Add item</button>
@@ -182,18 +164,6 @@ textarea{min-height:64px;resize:vertical;}
 <div class="foot">
   <button id="clear">Clear</button>
   <button class="save" id="save">Save booking</button>
-</div>
-
-<div class="sheet hidden" id="code-sheet">
-  <div class="box">
-    <h3>Access code</h3>
-    <p id="code-why">Enter the code from the office so this phone can send bookings.</p>
-    <input id="code-input" type="text" inputmode="text" autocomplete="off" placeholder="Access code">
-    <div class="row">
-      <button id="code-cancel" type="button">Later</button>
-      <button id="code-save" class="go" type="button">Save</button>
-    </div>
-  </div>
 </div>
 
 <script src="/field.js"></script>
