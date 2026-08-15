@@ -2149,10 +2149,13 @@ class Context:
             raise HttpError(403, "This action requires an administrator account.")
 
     def require_field_access(self):
-        """A signed-in user, or a phone presenting the field token."""
+        """Open unless a code has been configured; then a signed-in user or a
+        phone presenting that code."""
+        if not FIELD_TOKEN:
+            return
         if self.user:
             return
-        if FIELD_TOKEN and hmac.compare_digest(self.field_token or "", FIELD_TOKEN):
+        if hmac.compare_digest(self.field_token or "", FIELD_TOKEN):
             return
         raise HttpError(401, "This device is not authorised for field entry.")
 

@@ -32,7 +32,15 @@ const token = () => localStorage.getItem(TOKEN_KEY) || "";
 /* An in-page sheet rather than window.prompt: prompt() blocks the page while
    it is open, and installed PWAs often suppress it outright. */
 let codeAsked = false;
+function revealCodeControls() {
+  $("code-btn").classList.remove("hidden");
+  $("enter-code").classList.remove("hidden");
+  $("no-items-why").textContent =
+    "This phone needs the access code from the office before it can load the item list.";
+}
+
 function askForToken(reason) {
+  revealCodeControls();
   if (codeAsked) return;
   codeAsked = true;
   if (reason) $("code-why").textContent = reason;
@@ -89,6 +97,7 @@ async function loadCatalogue() {
     const res = await fetch("/api/field/bootstrap", { cache: "no-store",
       headers: token() ? { "X-Field-Token": token() } : {} });
     if (res.status === 401 || res.status === 403) { askForToken(); return; }
+    // no code needed on this server - keep those controls out of the way
     if (!res.ok) return;
     const data = await res.json();
     localStorage.setItem(CACHE_KEY, JSON.stringify(data));

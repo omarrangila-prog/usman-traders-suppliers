@@ -11,7 +11,7 @@
  *     actively harmful. Offline API calls fail, and the pages handle that -
  *     the field form queues its entries locally.
  */
-const VERSION = "utf-v9";
+const VERSION = "utf-v10";
 const SHELL = [
   "/", "/index.html", "/app.js", "/styles.css",
   "/field.html", "/field.js",
@@ -46,6 +46,24 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  // The item list is the one API answer worth keeping. A booking form with no
+  // items is useless, and a day-old price list is far better than none - every
+  // other endpoint stays live, because stale stock or money would mislead.
+  if (url.pathname === "/api/field/bootstrap") {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(VERSION).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request).then((hit) =>
+          hit || new Response('{"products":[],"customers":[],"suppliers":[]}',
+                              { headers: { "Content-Type": "application/json" } }))));
+    return;
+  }
   if (url.pathname.startsWith("/api/")) return;      // always live, never cached
 
   event.respondWith(

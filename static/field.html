@@ -113,7 +113,7 @@ textarea{min-height:64px;resize:vertical;}
     <span id="company">Usman Traders &amp; Suppliers</span>
   </div>
   <div class="net" id="net"><span class="dot"></span><span id="net-text">Online</span></div>
-  <button id="code-btn" title="Access code" aria-label="Access code"
+  <button id="code-btn" class="hidden" title="Access code" aria-label="Access code"
     style="border:0;background:rgba(255,255,255,.18);color:#fff;border-radius:8px;
            padding:7px 9px;font-size:15px;line-height:1;margin-right:-2px">&#9881;</button>
 </header>
@@ -153,9 +153,10 @@ textarea{min-height:64px;resize:vertical;}
       <strong style="display:block;color:#a35c00;font-size:13.5px;margin-bottom:4px">
         No items loaded</strong>
       <p style="margin:0 0 11px;font-size:12.5px;color:#454b54;line-height:1.5">
-        This phone needs the access code from the office before it can load the
-        item list and prices.</p>
-      <button id="enter-code" type="button"
+        <span id="no-items-why">The item list has not reached this phone yet.
+        Open the form once with internet and it is kept on the device from then
+        on.</span></p>
+      <button id="enter-code" class="hidden" type="button"
               style="width:100%;padding:11px;border-radius:9px;border:1px solid #c1121f;
                      background:#c1121f;color:#fff;font-weight:700;font-family:inherit">
         Enter access code</button>
