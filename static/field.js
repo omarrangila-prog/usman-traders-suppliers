@@ -85,9 +85,34 @@ function applyCatalogue(data) {
   catalogue = data;
   (catalogue.products || []).sort((a, b) => String(a.sku).localeCompare(String(b.sku)));
   $("company").textContent = data.company || "Usman Traders & Suppliers";
-  const names = kind === "Purchase" ? data.suppliers : data.customers;
-  $("party-list").innerHTML = (names || []).map((n) => `<option value="${h(n)}">`).join("");
+  renderParties();
   renderLines();
+}
+
+/** The known shops as a list you can see, with room to add a new one. */
+function renderParties() {
+  const names = (kind === "Purchase" ? catalogue.suppliers : catalogue.customers) || [];
+  const chosen = $("party-pick").value;
+  $("party-pick").innerHTML =
+    `<option value="">${names.length ? "Choose a " + (kind === "Purchase" ? "supplier" : "shop")
+                                     + "..." : "No saved names yet"}</option>` +
+    names.map((n) => `<option value="${h(n)}">${h(n)}</option>`).join("") +
+    `<option value="__new">+ Someone new</option>`;
+  if (chosen && (names.includes(chosen) || chosen === "__new")) $("party-pick").value = chosen;
+  $("party-pick-label").classList.toggle("hidden", !names.length);
+  showNameBox(!names.length || $("party-pick").value === "__new");
+}
+
+function showNameBox(show) {
+  $("party-name-label").classList.toggle("hidden", !show);
+  if (show) $("party").value = $("party").value || "";
+}
+
+/** Whichever way the name was given. */
+function partyName() {
+  const picked = $("party-pick").value;
+  if (picked && picked !== "__new") return picked;
+  return $("party").value.trim();
 }
 
 async function loadCatalogue() {
@@ -192,8 +217,12 @@ function renderQueue() {
 }
 
 function save() {
-  const party = $("party").value.trim();
-  if (!party) { toast("Enter the shop or customer name.", "err"); $("party").focus(); return; }
+  const party = partyName();
+  if (!party) {
+    toast("Choose a shop or type a new name.", "err");
+    ($("party-name-label").classList.contains("hidden") ? $("party-pick") : $("party")).focus();
+    return;
+  }
   const chosen = lines.filter((l) => l.sku && Number(l.qty) > 0);
   if (!chosen.length) { toast("Add at least one item.", "err"); return; }
 
@@ -219,6 +248,8 @@ function save() {
 
   lines = [];
   $("party").value = ""; $("phone").value = ""; $("notes").value = "";
+  $("party-pick").value = "";
+  renderParties();
   renderLines();
   renderQueue();
   toast(navigator.onLine ? "Saved — syncing…" : "Saved on this phone. It will sync automatically.",
@@ -330,8 +361,7 @@ document.querySelectorAll(".seg button").forEach((button) => {
     kind = button.dataset.kind;
     $("party-heading").textContent = kind === "Purchase" ? "Supplier" : "Shop / customer";
     $("save").textContent = kind === "Purchase" ? "Save purchase" : "Save booking";
-    const names = kind === "Purchase" ? catalogue.suppliers : catalogue.customers;
-    $("party-list").innerHTML = (names || []).map((n) => `<option value="${h(n)}">`).join("");
+    renderParties();
     lines.forEach((l) => {
       const product = catalogue.products.find((p) => p.sku === l.sku);
       if (product) l.price = Number(
@@ -344,9 +374,12 @@ document.querySelectorAll(".seg button").forEach((button) => {
 $("add-line").addEventListener("click", () => { lines.push({ sku: "", qty: 1, price: 0 }); renderLines(); });
 $("save").addEventListener("click", save);
 $("sync-now").addEventListener("click", () => { showNetwork(); sync(); });
+$("party-pick").addEventListener("change", () => showNameBox($("party-pick").value === "__new"));
 $("clear").addEventListener("click", () => {
   lines = []; $("party").value = ""; $("phone").value = "";
   $("city").value = ""; $("notes").value = "";
+  $("party-pick").value = "";
+  renderParties();
   renderLines();
 });
 
@@ -365,6 +398,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) sync
 setInterval(sync, 30000);          // catch connections that return quietly
 
 $("date").value = new Date().toISOString().slice(0, 10);
+renderParties();
 renderLines();
 renderQueue();
 showNetwork();

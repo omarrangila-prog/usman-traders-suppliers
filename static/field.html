@@ -136,8 +136,10 @@ textarea{min-height:64px;resize:vertical;}
 
   <div class="card">
     <h2 id="party-heading">Shop / customer</h2>
-    <label>Name *<input id="party" list="party-list" placeholder="Shop or customer name" autocomplete="off"></label>
-    <datalist id="party-list"></datalist>
+    <label id="party-pick-label">Choose from your list
+      <select id="party-pick"></select></label>
+    <label id="party-name-label">Name *
+      <input id="party" placeholder="Shop or customer name" autocomplete="off"></label>
     <div class="two">
       <label>Phone<input id="phone" type="tel" inputmode="tel" placeholder="0300-1234567"></label>
       <label>City<input id="city" placeholder="Karachi"></label>
