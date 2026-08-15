@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS company (
 
 CREATE TABLE IF NOT EXISTS customers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    code       TEXT NOT NULL DEFAULT '',
     name       TEXT NOT NULL,
     contact    TEXT NOT NULL DEFAULT '',
     phone      TEXT NOT NULL DEFAULT '',
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS customers (
 
 CREATE TABLE IF NOT EXISTS suppliers (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    code       TEXT NOT NULL DEFAULT '',
     name       TEXT NOT NULL,
     contact    TEXT NOT NULL DEFAULT '',
     phone      TEXT NOT NULL DEFAULT '',
@@ -318,7 +320,7 @@ PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 # to notice that its database predates the current code. Checking for one known
 # table is not enough - that table exists happily while newer ones are missing -
 # and neither is checking tables alone, since new chart accounts are data.
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
@@ -591,7 +593,15 @@ SEED_PRODUCTS = [
 # Customers and suppliers start empty on purpose - placeholder parties in a live
 # ledger are a liability (they end up on real invoices). Add them from the UI.
 SEED_CUSTOMERS = []
-SEED_SUPPLIERS = []
+# The vendor list as supplied, ids kept exactly as they are used in the business.
+# (code, name, contact, phone, email, address, city)
+SEED_SUPPLIERS = [
+    ("00001", "REHAN AND BROTHERS", "",            "0316-2539004", "", "", ""),
+    ("00002", "AMEER ALI HASSAN",   "",            "0318-0034452", "", "", ""),
+    ("00003", "SINDH ACHAR",        "MR NAZEER",   "0310-2731945", "", "", ""),
+    ("00004", "MAMTA TEA",          "MR SHARJEEL", "0313-1043192", "", "", ""),
+    ("00005", "HINA TEA",           "",            "0301-2386446", "", "", ""),
+]
 
 
 # Stand-in mark in the brand's colours, shown until a real logo is uploaded
@@ -690,12 +700,15 @@ def seed(conn):
             ("admin", "System Administrator", "admin", pw_hash, salt),
         )
 
-    cur.execute("SELECT COUNT(*) c FROM suppliers")
-    if cur.fetchone()["c"] == 0:
+    # inserted per vendor rather than only when the table is empty, so a list
+    # added later still reaches a database that is already in use
+    have = {r["code"] for r in cur.execute(
+        "SELECT code FROM suppliers WHERE code <> ''").fetchall()}
+    missing = [v for v in SEED_SUPPLIERS if v[0] not in have]
+    if missing:
         cur.executemany(
-            "INSERT INTO suppliers (name, contact, phone, email, address, city) VALUES (?,?,?,?,?,?)",
-            SEED_SUPPLIERS,
-        )
+            """INSERT INTO suppliers (code, name, contact, phone, email, address, city)
+               VALUES (?,?,?,?,?,?,?)""", missing)
 
     cur.execute("SELECT COUNT(*) c FROM customers")
     if cur.fetchone()["c"] == 0:
@@ -739,6 +752,25 @@ def postgres_schema(sql):
     return sql
 
 
+def add_missing_columns(conn):
+    """CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a column
+    added in a later version has to be applied to databases already in use."""
+    wanted = {"customers": [("code", "TEXT NOT NULL DEFAULT ''")],
+              "suppliers": [("code", "TEXT NOT NULL DEFAULT ''")]}
+    for table, columns in wanted.items():
+        if conn.postgres:
+            existing = {r["column_name"] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = ? AND table_name = ?",
+                (PG_SCHEMA, table)).fetchall()}
+        else:
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for column, spec in columns:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+    conn.commit()
+
+
 def init():
     conn = connect()
     if conn.postgres:
@@ -749,6 +781,7 @@ def init():
     else:
         conn.executescript(SCHEMA)
     conn.commit()
+    add_missing_columns(conn)
     seed(conn)
     upsert = ("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
               "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" if conn.postgres

@@ -340,7 +340,8 @@ def delete_product(ctx, product_id):
 # Customers & suppliers (identical shape, shared handlers)
 # --------------------------------------------------------------------------
 
-PARTY_FIELDS = ["name", "contact", "phone", "email", "address", "city", "tax_id", "notes"]
+PARTY_FIELDS = ["code", "name", "contact", "phone", "email", "address",
+                "city", "tax_id", "notes"]
 
 
 def party_list(ctx, table):
@@ -349,9 +350,10 @@ def party_list(ctx, table):
     if search:
         like = f"%{search}%"
         return rows(ctx.conn.execute(
-            f"SELECT * FROM {table} WHERE name LIKE ? OR contact LIKE ? OR phone LIKE ? OR city LIKE ?"
-            " ORDER BY name", (like, like, like, like)))
-    return rows(ctx.conn.execute(f"SELECT * FROM {table} ORDER BY name"))
+            f"SELECT * FROM {table} WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? "
+            f"OR phone LIKE ? OR city LIKE ? ORDER BY code, name",
+            (like, like, like, like, like)))
+    return rows(ctx.conn.execute(f"SELECT * FROM {table} ORDER BY code, name"))
 
 
 def party_save(ctx, table, party_id=None):

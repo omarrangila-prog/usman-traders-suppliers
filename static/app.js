@@ -1561,9 +1561,11 @@ function partyView(kind) {
     function refresh() {
       const term = search.toLowerCase();
       const filtered = list.filter((p) =>
-        !term || (p.name + " " + p.contact + " " + p.phone + " " + p.city).toLowerCase().includes(term));
+        !term || (p.code + " " + p.name + " " + p.contact + " " + p.phone + " " + p.city)
+          .toLowerCase().includes(term));
       $("#party-body").innerHTML = filtered.length ? filtered.map((p) => `
         <tr>
+          <td class="mono strong">${h(p.code) || `<span class="muted">-</span>`}</td>
           <td class="strong">${h(p.name)}${p.tax_id ? `<div class="muted mono">NTN ${h(p.tax_id)}</div>` : ""}</td>
           <td>${h(p.contact) || `<span class="muted">-</span>`}</td>
           <td>${h(p.phone) || `<span class="muted">-</span>`}<div class="muted">${h(p.email)}</div></td>
@@ -1574,7 +1576,7 @@ function partyView(kind) {
             <button class="btn btn-sm" data-edit="${p.id}">Edit</button>
             <button class="btn btn-sm btn-danger" data-del="${p.id}">Delete</button></td>
         </tr>`).join("")
-        : `<tr><td colspan="6">${emptyState(isCustomer ? "◍" : "◉", `No ${kind} yet`,
+        : `<tr><td colspan="7">${emptyState(isCustomer ? "◍" : "◉", `No ${kind} yet`,
             `Add your first ${label.toLowerCase()} to start recording business.`,
             `<button class="btn btn-primary" id="empty-add">+ New ${label}</button>`)}</td></tr>`;
 
@@ -1595,10 +1597,10 @@ function partyView(kind) {
 
     el("content").innerHTML = `
       <div class="toolbar">
-        <input class="search" id="f-q" placeholder="Search name, contact, phone or city...">
+        <input class="search" id="f-q" placeholder="Search code, name, contact, phone or city...">
         <span class="muted">${list.length} ${kind}</span>
       </div>
-      ${tableCard(`<th>${label}</th><th>Contact person</th><th>Phone / email</th>
+      ${tableCard(`<th>Code</th><th>${label}</th><th>Contact person</th><th>Phone / email</th>
         <th>City / address</th><th>Status</th><th></th>`, "")}`;
     $("table.data tbody").id = "party-body";
     $("#f-q").addEventListener("input", (e) => { search = e.target.value; refresh(); });
@@ -1620,6 +1622,8 @@ function partyModal(kind, party) {
     wide: true,
     body: `
       <div class="field-row">
+        <label class="field">${label} code
+          <input name="code" value="${h(p.code || "")}" placeholder="00001"></label>
         <label class="field">${label} name *<input name="name" value="${h(p.name || "")}" required></label>
         <label class="field">Contact person<input name="contact" value="${h(p.contact || "")}"></label>
       </div>
