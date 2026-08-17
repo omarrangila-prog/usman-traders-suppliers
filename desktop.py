@@ -73,7 +73,21 @@ def find_browser():
     return None
 
 
+def tell_user(title, message):
+    """A frozen build may have no console, so put failures where they can be
+    seen rather than leaving the user staring at nothing."""
+    print(f"{title}: {message}")
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+        except Exception:
+            pass
+
+
 def main():
+    print("  Starting Usman Traders & Suppliers...")
+    print("  (the first start takes a few seconds)\n")
     port = free_port()
     db.init().close()
 
@@ -87,7 +101,11 @@ def main():
     print(f"  data file  {db.DB_PATH}\n")
 
     if not wait_until_ready(port):
-        raise SystemExit("The server did not start. Check the messages above.")
+        tell_user("Usman Traders",
+                  "The program could not start its server.\n\n"
+                  f"Data folder: {db.DB_PATH}\n"
+                  "Check that no antivirus is blocking it, then try again.")
+        raise SystemExit(1)
 
     if "--no-window" in sys.argv or os.environ.get("UT_NO_WINDOW"):
         print("  Running without a window. Press Ctrl+C to stop.\n")
@@ -144,11 +162,17 @@ if __name__ == "__main__":
         # A frozen build has no console, so a crash would otherwise be silent.
         # Leave a note beside the program saying what went wrong.
         import traceback
+        detail = traceback.format_exc()
         report = os.path.join(BASE_DIR, "startup-error.log")
         try:
             with open(report, "w", encoding="utf-8") as handle:
-                handle.write(traceback.format_exc())
+                handle.write(detail)
         except OSError:
-            pass
+            report = "(could not be written)"
         traceback.print_exc()
+        try:
+            tell_user("Usman Traders could not start",
+                      detail.strip().splitlines()[-1] + f"\n\nDetails saved to:\n{report}")
+        except Exception:
+            pass
         raise

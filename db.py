@@ -17,14 +17,38 @@ IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 # a lie, and a warning nobody can trust is worse than none.
 DEMO_MODE = bool(os.environ.get("VERCEL")) and not IS_POSTGRES
 
+def _writable(folder):
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, ".write-test")
+        with open(probe, "w") as handle:
+            handle.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
 def _data_dir():
-    """Where the database belongs: beside the program the user runs. For a
-    frozen .exe that is the folder holding the .exe, not the temporary folder
-    its code was unpacked into."""
+    """Where the database belongs: beside the program the user runs.
+
+    People often launch the program straight out of the downloaded zip, or from
+    Program Files - both read-only, so writing beside it fails and the program
+    dies before it shows anything. When that folder cannot be written to, fall
+    back to a per-user folder that always can be."""
     import sys
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+    beside = (os.path.dirname(os.path.abspath(sys.executable))
+              if getattr(sys, "frozen", False)
+              else os.path.dirname(os.path.abspath(__file__)))
+    if _writable(beside):
+        return beside
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        fallback = os.path.join(base, "UsmanTraders")
+    else:
+        fallback = os.path.join(os.path.expanduser("~"), ".usmantraders")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
 
 
 LOGO_DIR = getattr(__import__("sys"), "_MEIPASS",
