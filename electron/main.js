@@ -184,6 +184,10 @@ function showDataLocation() {
   });
 }
 
+// Kept so a failing self check can say what the page complained about, rather
+// than only that something did not work.
+const consoleLog = [];
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320, height: 880, minWidth: 960, minHeight: 620,
@@ -201,6 +205,14 @@ function createWindow() {
   });
 
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.webContents.on("console-message", (event) => {
+    if (consoleLog.length < 40) {
+      consoleLog.push(`[${event.level}] ${event.message} (${event.sourceId}:${event.lineNumber})`);
+    }
+  });
+  mainWindow.webContents.on("did-fail-load", (_e, code, description, target) => {
+    consoleLog.push(`failed to load ${target}: ${description} (${code})`);
+  });
   mainWindow.loadURL("app://usmantraders/index.html");
 
   // Anything aiming outside the program opens in the real browser instead of
@@ -347,6 +359,10 @@ async function selfCheck() {
   }
 
   const failed = results.filter((x) => !x.ok);
+  if (failed.length && consoleLog.length) {
+    console.log("\n  what the page reported:");
+    for (const line of consoleLog) console.log(`    ${line}`);
+  }
   console.log(failed.length
     ? `\nSELF CHECK FAILED: ${failed.length} of ${results.length}`
     : `\nSELF CHECK PASSED: ${results.length} checks`);
