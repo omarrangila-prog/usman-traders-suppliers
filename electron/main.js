@@ -10,6 +10,23 @@ const path = require("node:path");
 const fs = require("node:fs");
 const url = require("node:url");
 
+const CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+};
+
+function contentType(file) {
+  return CONTENT_TYPES[path.extname(file).toLowerCase()] || "application/octet-stream";
+}
+
 const ROOT = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..");
 const STATIC_DIR = path.join(ROOT, "static");
 
@@ -232,8 +249,19 @@ app.whenReady().then(async () => {
     const wanted = decodeURIComponent(asked.pathname);
     const file = path.join(STATIC_DIR, wanted === "/" ? "index.html" : wanted);
     // Never serve anything outside the program's own files.
-    if (!file.startsWith(STATIC_DIR)) return new Response("Not found", { status: 404 });
-    return net.fetch(url.pathToFileURL(file).href);
+    if (!path.resolve(file).startsWith(path.resolve(STATIC_DIR))) {
+      return new Response("Not found", { status: 404 });
+    }
+    try {
+      // The type has to be stated. A browser engine will not run a script or
+      // apply a stylesheet that arrives without one, and the page would come
+      // up blank with nothing in the log to say why.
+      return new Response(fs.readFileSync(file), {
+        headers: { "Content-Type": contentType(file) },
+      });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
   });
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate()));
@@ -270,6 +298,7 @@ async function selfCheck() {
       mainWindow.webContents.once("did-finish-load", () => { clearTimeout(timer); resolve(); });
     });
 
+    mainWindow.show();
     record("a real window opened", !mainWindow.isDestroyed() && mainWindow.isVisible());
     record("the window has the business's name",
       mainWindow.getTitle().includes("Usman Traders"), mainWindow.getTitle());
@@ -280,11 +309,17 @@ async function selfCheck() {
 
     const loaded = await mainWindow.webContents.executeJavaScript(
       "({ bridge: Boolean(window.usmanTraders && window.usmanTraders.desktop),"
-      + " styled: getComputedStyle(document.body).fontFamily.length > 0,"
-      + " app: typeof api === 'function' })");
-    record("the interface is running inside it", loaded.app);
+      // a stylesheet that was refused still appears in the list but holds no
+      // rules, so counting the rules is what actually proves it was applied
+      + " cssRules: [...document.styleSheets].reduce((n, s) => {"
+      + "   try { return n + s.cssRules.length; } catch (e) { return n; } }, 0),"
+      + " app: typeof api === 'function',"
+      + " painted: document.body.innerHTML.length })");
+    record("the interface is running inside it", loaded.app,
+      `app.js did not define its functions (body ${loaded.painted} chars)`);
     record("it is wired to the program, not to a server", loaded.bridge);
-    record("the stylesheet loaded", loaded.styled);
+    record("the stylesheet was applied", loaded.cssRules > 50, `${loaded.cssRules} rules`);
+    record("the page drew its content", loaded.painted > 500, `${loaded.painted} chars`);
 
     const health = await mainWindow.webContents.executeJavaScript(
       "window.usmanTraders.call('GET', '/api/health', {}, {})");
