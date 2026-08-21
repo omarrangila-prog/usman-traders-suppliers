@@ -34,7 +34,45 @@ function fmtDate(value) {
 function today() { return new Date().toISOString().slice(0, 10); }
 function monthStart() { return today().slice(0, 8) + "01"; }
 
+// Running inside the desktop program there is no server to call: the window
+// hands the request to the program itself, which reads the data file directly.
+const DESKTOP = typeof window !== "undefined" && window.usmanTraders && window.usmanTraders.desktop;
+
+async function desktopApi(path, options) {
+  const opts = options || {};
+  const [route, search] = ("/api" + path).split("?");
+  const query = Object.fromEntries(new URLSearchParams(search || ""));
+  let body = opts.body;
+  if (typeof body === "string") { try { body = JSON.parse(body); } catch (_) { body = {}; } }
+  const reply = await window.usmanTraders.call(opts.method || "GET", route, body || {}, query);
+  if (reply.ok) return reply.data;
+  if (reply.status === 401 && state.user) {
+    showLogin();
+    throw new Error("Session expired. Please sign in again.");
+  }
+  const err = new Error(reply.error || `Request failed (${reply.status})`);
+  if (reply.status === 409 && (reply.error || "").includes("|IMPACT|")) {
+    const [message, detail] = reply.error.split("|IMPACT|");
+    err.message = message.trim();
+    try { err.impact = JSON.parse(detail); } catch (_) { /* no detail */ }
+  }
+  throw err;
+}
+
+/** Hand the user a file. The desktop program opens a Save dialog; the web
+ *  version lets the browser download it. */
+async function downloadFile(path) {
+  if (!DESKTOP) { window.location = path; return; }
+  try {
+    const result = await api(path.replace(/^\/api/, ""));
+    if (result && result.saved) toast("Saved to " + result.path, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
 async function api(path, options) {
+  if (DESKTOP) return desktopApi(path, options);
   const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
   if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
   let res;
@@ -1324,7 +1362,7 @@ async function purchaseDetail(purchaseId) {
 async function viewProducts() {
   await loadMasters(true);
   pageAction("+ New Product", () => productModal(null));
-  pageAction("⤓ Excel", () => { window.location = "/api/products/export"; }, "btn");
+  pageAction("⤓ Excel", () => { downloadFile("/api/products/export"); }, "btn");
 
   const categories = [...new Set(state.products.map((p) => p.category).filter(Boolean))].sort();
   let search = "", category = "";
@@ -2270,7 +2308,7 @@ async function viewReports() {
 
   pageAction("⤓ Download Excel", () => {
     const range = tab === "inventory" ? "" : `?from=${from}&to=${to}`;
-    window.location = `/api/reports/${tab}/export${range}`;
+    downloadFile(`/api/reports/${tab}/export${range}`);
     toast("Excel file downloading...", "success");
   });
   pageAction("Print report", () => {
@@ -2447,7 +2485,7 @@ async function viewCompany() {
   const backupButton = $("#backup-btn");
   if (backupButton) {
     backupButton.addEventListener("click", () => {
-      window.location = "/api/backup";
+      downloadFile("/api/backup");
       toast("Backup downloading - keep it somewhere safe.", "success");
     });
   }
@@ -2744,7 +2782,7 @@ el("install-chip").addEventListener("click", async () => {
 });
 window.addEventListener("appinstalled", () => el("install-chip").classList.add("hidden"));
 
-if ("serviceWorker" in navigator) {
+if (!DESKTOP && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* not a secure context */ });
 }
 

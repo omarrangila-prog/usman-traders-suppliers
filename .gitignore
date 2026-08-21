@@ -17,3 +17,7 @@ pocketbase/CHANGELOG.md
 pocketbase/LICENSE.md
 tools/cloudflared
 .desktop-profile/
+
+# Electron desktop build
+electron/node_modules/
+electron/dist/

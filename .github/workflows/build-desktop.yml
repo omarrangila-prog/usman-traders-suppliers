@@ -1,0 +1,100 @@
+name: Build Windows desktop app
+
+# The program is a real Windows application: Electron owns the window, the data
+# is a SQLite file on the machine, and nothing is served over a port. Nothing is
+# published unless the built program has been installed on a clean Windows
+# machine and proved it opens a window and answers with the business's data.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        working-directory: electron
+        run: npm install --no-audit --no-fund
+
+      - name: The figures must match what was worked out on paper
+        working-directory: electron
+        run: node test/figures.js
+
+      - name: Every operation must still behave
+        working-directory: electron
+        run: node test/operations.js
+
+      - name: Build the installer and the portable program
+        working-directory: electron
+        run: npx electron-builder --win --publish never
+
+      - name: What came out
+        shell: bash
+        run: ls -l electron/dist/*.exe
+
+      # The window is the part that cannot be checked by unit tests, and it is
+      # exactly what was broken before. So install it the way a customer would
+      # and make the installed program prove itself.
+      - name: Install it the way a customer would
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem electron\dist\UsmanTraders-Setup-*.exe | Select-Object -First 1
+          Write-Host "Installing $($setup.Name)"
+          Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait
+          $installed = "$env:LOCALAPPDATA\Programs\usman-traders\Usman Traders & Suppliers.exe"
+          if (-not (Test-Path $installed)) {
+            Write-Host "Looking for what the installer actually produced:"
+            Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter *.exe |
+              Select-Object -First 20 FullName | Format-Table -AutoSize
+            throw "the installer did not put the program where it said it would"
+          }
+          Write-Host "Installed to $installed"
+          "INSTALLED=$installed" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: The installed program must open a window and answer
+        shell: pwsh
+        run: |
+          $env:UT_SHOT = "$PWD\window.png"
+          $env:UT_LOGIN = "off"
+          & "$env:INSTALLED" --self-check | Tee-Object -Variable output
+          if ($LASTEXITCODE -ne 0) { throw "the installed program failed its self check" }
+          if (-not ($output -match "SELF CHECK PASSED")) { throw "no passing self check was reported" }
+
+      - name: The portable program must work too, from a read-only folder
+        shell: pwsh
+        run: |
+          $portable = Get-ChildItem electron\dist\UsmanTraders-Portable-*.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path locked | Out-Null
+          Copy-Item $portable.FullName locked\
+          # Deny writes, the way running it straight out of a downloaded zip does
+          $acl = Get-Acl locked
+          $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().Name, 'Write', 'Deny')
+          $acl.AddAccessRule($rule)
+          Set-Acl locked $acl
+          $exe = Get-ChildItem locked\*.exe | Select-Object -First 1
+          $env:UT_LOGIN = "off"
+          & $exe.FullName --self-check | Tee-Object -Variable output
+          if ($LASTEXITCODE -ne 0) { throw "the portable program failed from a read-only folder" }
+          Write-Host "it still runs when its own folder cannot be written to"
+
+      - name: Proof the window drew
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-screenshot
+          path: window.png
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UsmanTraders-windows
+          path: electron/dist/*.exe
+          retention-days: 90

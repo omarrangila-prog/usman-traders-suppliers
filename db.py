@@ -29,7 +29,7 @@ def _writable(folder):
         return False
 
 
-def _data_dir():
+def data_dir():
     """Where the database belongs: beside the program the user runs.
 
     People often launch the program straight out of the downloaded zip, or from
@@ -56,7 +56,7 @@ LOGO_DIR = getattr(__import__("sys"), "_MEIPASS",
 
 DB_PATH = os.environ.get("UT_DB") or (
     "/tmp/usmantraders.db" if DEMO_MODE
-    else os.path.join(_data_dir(), "usmantraders.db")
+    else os.path.join(data_dir(), "usmantraders.db")
 )
 
 SCHEMA = """
