@@ -319,19 +319,37 @@ async function selfCheck() {
     record("the window has a usable size", size.width >= 900 && size.height >= 600,
       `${size.width}x${size.height}`);
 
-    const loaded = await mainWindow.webContents.executeJavaScript(
-      "({ bridge: Boolean(window.usmanTraders && window.usmanTraders.desktop),"
+    // The interface signs itself in and draws the dashboard on its own, so wait
+    // for that to finish rather than inspecting the script that does it.
+    const probe = "({"
+      + " bridge: Boolean(window.usmanTraders && window.usmanTraders.desktop),"
       // a stylesheet that was refused still appears in the list but holds no
       // rules, so counting the rules is what actually proves it was applied
       + " cssRules: [...document.styleSheets].reduce((n, s) => {"
       + "   try { return n + s.cssRules.length; } catch (e) { return n; } }, 0),"
-      + " app: typeof api === 'function',"
-      + " painted: document.body.innerHTML.length })");
-    record("the interface is running inside it", loaded.app,
-      `app.js did not define its functions (body ${loaded.painted} chars)`);
-    record("it is wired to the program, not to a server", loaded.bridge);
-    record("the stylesheet was applied", loaded.cssRules > 50, `${loaded.cssRules} rules`);
-    record("the page drew its content", loaded.painted > 500, `${loaded.painted} chars`);
+      + " navLinks: document.querySelectorAll('#nav a, #nav button').length,"
+      + " signedIn: !document.getElementById('app').classList.contains('hidden'),"
+      + " content: (document.getElementById('content') || {}).innerHTML || '',"
+      + " loginShown: !document.getElementById('login-screen').classList.contains('hidden')"
+      + "})";
+
+    let view = await mainWindow.webContents.executeJavaScript(probe);
+    for (let waited = 0; waited < 20000 && !view.navLinks; waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      view = await mainWindow.webContents.executeJavaScript(probe);
+    }
+
+    record("it is wired to the program, not to a server", view.bridge);
+    record("the stylesheet was applied", view.cssRules > 50, `${view.cssRules} rules`);
+    record("the interface built its menu", view.navLinks >= 5, `${view.navLinks} links`);
+    record("it signed in and opened the app", view.signedIn,
+      view.loginShown ? "it stopped at the sign-in screen" : "neither screen is showing");
+    record("a page rendered, not a spinner or an error",
+      view.content.length > 400 && !view.content.includes("Loading..."),
+      `${view.content.length} chars`);
+    record("the dashboard shows real figures",
+      /Stock value|Receivables|Sales this month/i.test(view.content),
+      view.content.slice(0, 120).replace(/\s+/g, " "));
 
     const health = await mainWindow.webContents.executeJavaScript(
       "window.usmanTraders.call('GET', '/api/health', {}, {})");
