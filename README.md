@@ -4,35 +4,69 @@ A simple business management system for a trading and supply company: purchase,
 manage and supply achar, masala, syrups, oils and other food items. No
 manufacturing — buying, stock, selling and delivery only.
 
-Runs on the **Python standard library alone**. Nothing to install, no internet
-needed, all data stays in one file on your machine.
+Two ways to run it, sharing one interface and one set of business rules:
+
+- **Windows program** — a real desktop application. Nothing to install beyond
+  it, no internet, all data in one file on that computer.
+- **Web version** — the same system in a browser, for the office and for
+  phones taking bookings in the field. Runs on the **Python standard library
+  alone**.
 
 ---
 
-## Windows program (.exe)
+## Windows program
 
-A single **UsmanTraders.exe** — no Python, no install. Download it from
-GitHub: **Actions → Build Windows exe → newest run → Artifacts →
-UsmanTraders-windows**. Unzip it, put the .exe wherever you like, and
-double-click.
+A real Windows application. Electron draws the window, the program holds your
+data itself, and nothing runs as a server: there is no port, no address to
+type, and no browser involved. It works with no internet because there is
+nothing for it to reach.
 
-Your data is written to `usmantraders.db` **beside the .exe**, so keep the two
-together and back that file up. If it ever refuses to start it writes
-`startup-error.log` next to itself saying why.
+Two ways to get it, from the
+[Releases page](https://github.com/omarrangila-prog/usman-traders-suppliers/releases):
 
-A fresh build is produced on GitHub's Windows machines from the current code,
-and the build refuses to publish unless the .exe actually starts and serves the
-app.
+| File | What it does |
+| --- | --- |
+| `UsmanTraders-Setup-<version>.exe` | Installs it properly, with a Start-menu and desktop shortcut. Use this one. |
+| `UsmanTraders-Portable-<version>.exe` | Runs without installing. Handy on a machine you cannot install software on. |
 
-## Desktop version (Linux / Mac)
+Windows will warn you the first time — **More info → Run anyway**. That is
+because the program is not code-signed, which needs a paid yearly certificate,
+not because anything is wrong with it.
 
-Double-click **`Usman Traders.desktop`** (Linux) or **`Usman Traders.bat`**
-(Windows) and it opens in its own window — no browser bar, nothing to type. It
-starts the server, opens the window, and shuts down when you close it.
+### Where your data lives
 
-Everything runs on that computer, so it works with no internet: the data sits in
-`usmantraders.db` beside the program. Set `DATABASE_URL` first if you would
-rather the desktop copy shared the cloud database with the phones.
+One file on that computer:
+
+```
+C:\Users\<you>\AppData\Roaming\usman-traders\usmantraders.db
+```
+
+The program tells you the exact path under **Help → About**, and the sidebar
+chip at the bottom left opens the folder. **File → Save a backup** writes a
+copy wherever you choose — do that regularly, because that single file is your
+whole business record.
+
+### Checking an installation
+
+Run it once with `--self-check` and it proves itself on that machine: opens a
+window, loads the interface, reads the data, and reports what passed.
+
+```
+"C:\...\Usman Traders & Suppliers.exe" --self-check
+```
+
+That same check runs on a clean Windows machine in the build pipeline, and a
+build that fails it is never published.
+
+### Building it yourself
+
+```bash
+cd electron
+npm install
+npm test          # 25 hand-computed figures, 79 operational checks
+npm start         # run it
+npx electron-builder --win    # build the installer
+```
 
 ## Running it
 

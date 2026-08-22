@@ -297,6 +297,8 @@ app.whenReady().then(async () => {
 // This is what the build pipeline runs before a release is published.
 
 async function selfCheck() {
+  console.log(`  version:   ${app.getVersion()}`);
+  console.log(`  data file: ${dataFile()}`);
   const results = [];
   const record = (label, ok, detail = "") => {
     results.push({ label, ok, detail });
