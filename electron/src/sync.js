@@ -444,6 +444,12 @@ export async function exchange(db, account) {
   const reply = await post(url, "/api/sync", {
     device: "desktop", changes, tombstones: graves, holding: holding(before),
   }, signIn.cookie);
+  if (reply.status === 404 || /No API endpoint/i.test(reply.payload.error || "")) {
+    // The address is right and the sign-in worked, so this is an older copy of
+    // the web site that predates sharing. Saying so is more use than the 404.
+    throw new Error("That web site is running an older version that cannot share yet. "
+      + "Update the web site, then try again. Nothing here has been changed.");
+  }
   if (reply.status !== 200) {
     throw new Error(reply.payload.error || `The cloud answered ${reply.status}.`);
   }
