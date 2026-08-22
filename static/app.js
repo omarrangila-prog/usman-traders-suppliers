@@ -2423,6 +2423,31 @@ async function viewCompany() {
         </div></div>
     </div>
 
+    ${DESKTOP ? `
+    <div class="card">
+      <div class="card-head"><h2>Sharing with the cloud</h2></div>
+      <div class="card-body" id="sharing-panel">
+        <p class="muted" style="margin-top:0">This program keeps its own books on this
+          computer and works with no internet. When it does have a connection it can swap
+          changes with the web site your bookers use &mdash; bookings taken on a phone come
+          in, and the work done here goes out.</p>
+        <div id="sharing-status" class="muted" style="margin-bottom:12px"></div>
+        <form id="sharing-form" class="form-grid">
+          <label class="field">Web address of your site
+            <input name="url" id="sharing-url" placeholder="https://your-site.vercel.app"></label>
+          <label class="field">Sign-in name there
+            <input name="username" id="sharing-user" placeholder="admin"></label>
+          <label class="field">Password there
+            <input name="password" id="sharing-pass" type="password"
+              placeholder="leave blank to keep the saved one"></label>
+        </form>
+        <div class="toolbar" style="margin:12px 0 0">
+          <button class="btn" id="sharing-save">Save these details</button>
+          <button class="btn btn-primary" id="sharing-now">Share now</button>
+          <button class="btn btn-ghost" id="sharing-conflicts">Records changed in both places</button>
+        </div>
+      </div></div>` : ""}
+
     ${state.user.role === "admin" ? `
     <div class="card" style="border-color:#f0c8c8">
       <div class="card-head" style="background:var(--brand-tint)">
@@ -2482,6 +2507,71 @@ async function viewCompany() {
   });
   $("#logo-clear").addEventListener("click", () => { logoData = ""; $("#logo-preview").removeAttribute("src"); });
   $("#pw-btn").addEventListener("click", passwordModal);
+
+  if (DESKTOP) {
+    const paintStatus = async () => {
+      const info = await window.usmanTraders.sharing();
+      $("#sharing-url").value = info.url || "";
+      $("#sharing-user").value = info.username || "admin";
+      $("#sharing-pass").placeholder = info.has_password
+        ? "leave blank to keep the saved one" : "the password for that site";
+      $("#sharing-status").innerHTML = info.url
+        ? `Last shared: <strong>${info.last_sync ? h(fmtWhen(info.last_sync)) : "never"}</strong>`
+          + (info.unresolved
+            ? ` &middot; <strong style="color:var(--brand)">${info.unresolved} record(s)
+                were changed in both places</strong>`
+            : "")
+        : "No address set yet, so nothing is being shared.";
+    };
+    paintStatus();
+
+    $("#sharing-save").addEventListener("click", async () => {
+      await window.usmanTraders.saveSharing({
+        url: $("#sharing-url").value,
+        username: $("#sharing-user").value,
+        password: $("#sharing-pass").value,
+      });
+      $("#sharing-pass").value = "";
+      toast("Saved.", "success");
+      await paintStatus();
+      await refreshSyncChip();
+    });
+
+    $("#sharing-now").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "Sharing...";
+      try {
+        await runSync();
+        await paintStatus();
+      } finally {
+        e.target.disabled = false;
+        e.target.textContent = "Share now";
+      }
+    });
+
+    $("#sharing-conflicts").addEventListener("click", async () => {
+      const rows = await window.usmanTraders.conflicts();
+      modal({
+        title: "Changed in both places",
+        wide: true,
+        body: rows.length ? `
+          <p class="muted" style="margin-top:0">When the same record was changed here and on
+            the web site, the newer one was kept. The other is listed below rather than thrown
+            away, so nothing is lost without you seeing it.</p>
+          <div class="table-wrap"><table class="table"><thead><tr>
+            <th>When</th><th>What</th><th>Kept</th><th>Not used</th></tr></thead><tbody>
+            ${rows.map((c) => `<tr>
+              <td>${h(c.noticed_at)}</td>
+              <td>${h(c.entity)}</td>
+              <td class="mono" style="font-size:11px;max-width:280px;overflow:hidden">
+                ${h(c.kept.slice(0, 180))}</td>
+              <td class="mono" style="font-size:11px;max-width:280px;overflow:hidden">
+                ${h(c.discarded.slice(0, 180))}</td></tr>`).join("")}
+          </tbody></table></div>`
+          : `<p class="muted">Nothing has ever been changed in both places at once.</p>`,
+      });
+    });
+  }
   const backupButton = $("#backup-btn");
   if (backupButton) {
     backupButton.addEventListener("click", () => {
@@ -2614,6 +2704,87 @@ function applyBranding() {
  * result in the sidebar. Runs after the first render so a slow or unreachable
  * cloud never holds up the app.
  */
+// ------------------------------------------------------- sharing with the cloud
+//
+// Only the desktop program does this. It keeps its own books and works with no
+// internet; this hands over what changed here and takes back what changed
+// there. Nothing in the app waits on it.
+
+function describeSync(result) {
+  const bits = [];
+  if (result.sent) bits.push(`sent ${result.sent}`);
+  if (result.received) bits.push(`received ${result.received}`);
+  if (result.sent_deletions) bits.push(`${result.sent_deletions} deleted here`);
+  if (result.received_deletions) bits.push(`${result.received_deletions} deleted there`);
+  return bits.length ? bits.join(", ") : "already up to date";
+}
+
+async function refreshSyncChip() {
+  if (!DESKTOP) return;
+  const chip = el("sync-chip");
+  const label = el("sync-text");
+  chip.classList.remove("hidden");
+  const info = await window.usmanTraders.sharing();
+  state.sharing = info;
+  if (!info.url) {
+    chip.className = "cloud-chip warn";
+    label.textContent = "Cloud not set up";
+  } else if (info.unresolved) {
+    chip.className = "cloud-chip warn";
+    label.textContent = `${info.unresolved} to review`;
+  } else if (info.last_sync) {
+    chip.className = "cloud-chip ok";
+    label.textContent = "Shared " + fmtWhen(info.last_sync);
+  } else {
+    chip.className = "cloud-chip";
+    label.textContent = "Never shared";
+  }
+  chip.title = info.url ? `Share with ${info.url}` : "Set the cloud address in Settings";
+  chip.onclick = () => (info.url ? runSync() : go("settings"));
+}
+
+function fmtWhen(stamp) {
+  const then = new Date(stamp + "Z");
+  if (isNaN(then)) return stamp;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)} h ago`;
+  return then.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
+let syncing = false;
+
+async function runSync(quiet) {
+  if (!DESKTOP || syncing) return null;
+  syncing = true;
+  const label = el("sync-text");
+  const was = label ? label.textContent : "";
+  if (label) label.textContent = "Sharing...";
+  try {
+    const reply = await window.usmanTraders.sync();
+    if (!reply.ok) {
+      if (!quiet) toast(reply.error, "error");
+      if (label) label.textContent = was;
+      return null;
+    }
+    const result = reply.data;
+    if (!quiet) {
+      toast("Shared with the cloud - " + describeSync(result), "success");
+      if (result.conflicts.length) {
+        toast(`${result.conflicts.length} record(s) were changed in both places. ` +
+              "Both versions were kept - see Settings.", "warn");
+      }
+    }
+    await refreshSyncChip();
+    // Whatever came back may be on the screen right now.
+    if (result.received || result.received_deletions) router();
+    return result;
+  } finally {
+    syncing = false;
+  }
+}
+
 async function pingAppwrite() {
   const chip = el("cloud-chip");
   const label = el("cloud-text");
@@ -2715,6 +2886,7 @@ async function showApp(user) {
   if (!location.hash) location.hash = "#/dashboard";
   router();
   pingAppwrite();
+  refreshSyncChip();
 }
 
 el("login-form").addEventListener("submit", async (e) => {
@@ -2793,6 +2965,13 @@ el("install-chip").addEventListener("click", async () => {
   el("install-chip").classList.add("hidden");
 });
 window.addEventListener("appinstalled", () => el("install-chip").classList.add("hidden"));
+
+if (DESKTOP && window.usmanTraders.onMenu) {
+  window.usmanTraders.onMenu((action) => {
+    if (action === "sync") runSync();
+    if (action === "backup") downloadFile("/api/backup");
+  });
+}
 
 if (!DESKTOP && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* not a secure context */ });

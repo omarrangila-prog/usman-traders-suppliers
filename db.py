@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
@@ -324,6 +325,60 @@ CREATE INDEX IF NOT EXISTS idx_stock_moves_product ON stock_moves(product_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id);
 CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id);
+
+-- ------------------------------------------------------------------------
+-- Sharing data between the office desktop and the cloud.
+--
+-- Two machines both numbering their rows from 1 cannot be merged, so every
+-- record that travels carries a uid that is unique everywhere. Rows created by
+-- a person get a random one; rows that both sides seed for themselves - the
+-- item master, the vendor list, the chart of accounts - derive theirs from the
+-- business key, so the two sides recognise them as the same row instead of
+-- ending up with two of everything.
+-- ------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- A row that is simply gone cannot be told apart from one that has not
+-- arrived yet, so deletions leave a marker behind for the other side.
+CREATE TABLE IF NOT EXISTS tombstones (
+    entity     TEXT NOT NULL,
+    uid        TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    PRIMARY KEY (entity, uid)
+);
+
+-- When both sides changed the same record since they last spoke, the newer one
+-- wins - but the other is kept here rather than thrown away, so nothing is
+-- lost silently and someone can look at what happened.
+CREATE TABLE IF NOT EXISTS sync_conflicts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity     TEXT NOT NULL,
+    uid        TEXT NOT NULL,
+    noticed_at TEXT NOT NULL,
+    kept       TEXT NOT NULL,
+    discarded  TEXT NOT NULL,
+    reviewed   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_tombstones_time ON tombstones(deleted_at);
+
+-- What we believe the other side already has. Comparing the current rows
+-- against this is how a change is noticed, rather than trusting every one of
+-- the seventy-odd write paths to remember to mark the row as changed. A path
+-- that forgot would lose the change silently, and this cannot: if the content
+-- differs from what was last agreed, it is a change, whoever made it and
+-- however they made it.
+CREATE TABLE IF NOT EXISTS sync_shadow (
+    entity    TEXT NOT NULL,
+    uid       TEXT NOT NULL,
+    hash      TEXT NOT NULL,
+    synced_at TEXT NOT NULL,
+    PRIMARY KEY (entity, uid)
+);
 """
 
 
@@ -344,7 +399,7 @@ PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 # to notice that its database predates the current code. Checking for one known
 # table is not enough - that table exists happily while newer ones are missing -
 # and neither is checking tables alone, since new chart accounts are data.
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _NO_ID_TABLES = {"settings"}
@@ -472,6 +527,66 @@ def connect():
     raw.row_factory = sqlite3.Row
     raw.execute("PRAGMA foreign_keys = ON")
     return Connection(raw, False)
+
+
+# --------------------------------------------------------------------------
+# Identity for sharing
+#
+# The tables whose rows travel between the office desktop and the cloud. Child
+# rows (order_items, journal_lines) are deliberately absent: they travel with
+# their parent as one piece, which keeps their own numbering a purely local
+# matter and removes a whole class of merge problem.
+# --------------------------------------------------------------------------
+
+SYNCED_TABLES = [
+    "customers", "suppliers", "products", "accounts", "fixed_assets",
+    "orders", "invoices", "purchases", "journal_entries", "field_entries",
+    "stock_moves", "company",
+]
+
+# Rows both sides create for themselves on first run. Their uid is derived from
+# the business key so the two installations arrive at the same one, and the
+# first sync recognises them as the same row rather than making a second copy.
+SEEDED_KEYS = {
+    "products": "sku",
+    "suppliers": "code",
+    "accounts": "code",
+}
+
+# Tables holding exactly one row. There is only ever one company, so both sides
+# must land on the same uid for it or a merge would try to file a second one.
+SINGLETONS = {"company"}
+
+
+def derived_uid(entity, key):
+    """A uid both sides work out independently, for rows they each seed."""
+    digest = hashlib.sha1(f"usmantraders:{entity}:{key}".encode()).hexdigest()
+    return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+
+
+def new_uid():
+    """A uid for a row a person just created."""
+    return str(uuid.uuid4())
+
+
+def stamp_uids(conn):
+    """Give a uid and a timestamp to any row that predates sharing."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    for table in SYNCED_TABLES:
+        key = SEEDED_KEYS.get(table)
+        rows_missing = conn.execute(
+            f"SELECT id{', ' + key if key else ''} FROM {table} "
+            f"WHERE uid IS NULL OR uid = ''").fetchall()
+        for row in rows_missing:
+            if table in SINGLETONS:
+                uid = derived_uid(table, "the-one")
+            elif key and row[key]:
+                uid = derived_uid(table, row[key])
+            else:
+                uid = new_uid()
+            conn.execute(f"UPDATE {table} SET uid = ?, updated_at = ? WHERE id = ?",
+                         (uid, now, row["id"]))
+    conn.commit()
 
 
 def hash_password(password, salt=None):
@@ -781,6 +896,10 @@ def add_missing_columns(conn):
     added in a later version has to be applied to databases already in use."""
     wanted = {"customers": [("code", "TEXT NOT NULL DEFAULT ''")],
               "suppliers": [("code", "TEXT NOT NULL DEFAULT ''")]}
+    for table in SYNCED_TABLES:
+        wanted.setdefault(table, []).extend(
+            [("uid", "TEXT NOT NULL DEFAULT ''"),
+             ("updated_at", "TEXT NOT NULL DEFAULT ''")])
     for table, columns in wanted.items():
         if conn.postgres:
             existing = {r["column_name"] for r in conn.execute(
@@ -807,6 +926,7 @@ def init():
     conn.commit()
     add_missing_columns(conn)
     seed(conn)
+    stamp_uids(conn)
     upsert = ("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
               "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" if conn.postgres
               else "INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)")

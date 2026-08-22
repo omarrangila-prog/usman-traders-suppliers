@@ -8,7 +8,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node test/figures.js && node test/operations.js",
+    "test": "node test/figures.js && node test/operations.js && node test/sharing.js",
     "dist": "electron-builder --win --publish never",
     "selfcheck": "electron . --self-check"
   },

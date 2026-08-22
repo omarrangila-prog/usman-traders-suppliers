@@ -34,6 +34,7 @@ const STATIC_DIR = path.join(ROOT, "static");
 let core = null;
 let database = null;
 let exportsModule = null;
+let syncModule = null;
 let db = null;
 let currentUser = null;
 let mainWindow = null;
@@ -118,6 +119,63 @@ async function saveBackup() {
   return { saved: true, path: chosen.filePath };
 }
 
+// ------------------------------------------------------------------ sharing
+//
+// The one place the program reaches the network, and only when asked. The
+// books are readable and writable whether it succeeds or not.
+
+function sharingSettings() {
+  const row = db.get("SELECT value FROM sync_state WHERE key = 'account'");
+  const saved = row ? JSON.parse(row.value) : {};
+  return { url: saved.url || "", username: saved.username || "admin",
+    password: saved.password || "", auto: Boolean(saved.auto) };
+}
+
+ipcMain.handle("ut:sharing", () => {
+  const settings = sharingSettings();
+  return {
+    url: settings.url, username: settings.username, auto: settings.auto,
+    // never hand the password back to the window; only whether one is set
+    has_password: Boolean(settings.password),
+    last_sync: syncModule.lastSync(db),
+    unresolved: db.scalar("SELECT COUNT(*) FROM sync_conflicts WHERE reviewed = 0"),
+  };
+});
+
+ipcMain.handle("ut:sharing/save", (_event, settings) => {
+  context.requireAdmin();
+  const current = sharingSettings();
+  const merged = {
+    url: String(settings.url || "").trim(),
+    username: String(settings.username || "admin").trim(),
+    // an empty box means "leave the password alone", not "clear it"
+    password: settings.password ? String(settings.password) : current.password,
+    auto: Boolean(settings.auto),
+  };
+  db.run(`INSERT INTO sync_state (key, value) VALUES ('account', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [JSON.stringify(merged)]);
+  return { ok: true };
+});
+
+ipcMain.handle("ut:sync", async () => {
+  try {
+    context.requireUser();
+    const account = sharingSettings();
+    if (!account.url) {
+      return { ok: false, error: "No cloud address has been set. Open Settings first." };
+    }
+    const result = await syncModule.exchange(db, account);
+    return { ok: true, data: result };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle("ut:conflicts", () => {
+  context.requireUser();
+  return db.all("SELECT * FROM sync_conflicts ORDER BY id DESC LIMIT 100");
+});
+
 ipcMain.handle("ut:where", () => ({
   data: dataFile(),
   folder: app.getPath("userData"),
@@ -138,6 +196,9 @@ function menuTemplate() {
         { label: "Save a backup...", accelerator: "CmdOrCtrl+B",
           click: () => mainWindow.webContents.send("ut:menu", "backup") },
         { label: "Where is my data?", click: showDataLocation },
+        { type: "separator" },
+        { label: "Share with the cloud now", accelerator: "CmdOrCtrl+R",
+          click: () => mainWindow.webContents.send("ut:menu", "sync") },
         { type: "separator" },
         { role: "quit", label: "Exit" },
       ],
@@ -242,6 +303,7 @@ app.whenReady().then(async () => {
     database = await import(url.pathToFileURL(path.join(__dirname, "src/database.js")).href);
     core = await import(url.pathToFileURL(path.join(__dirname, "src/core.js")).href);
     exportsModule = await import(url.pathToFileURL(path.join(__dirname, "src/exports.js")).href);
+    syncModule = await import(url.pathToFileURL(path.join(__dirname, "src/sync.js")).href);
 
     db = database.open(dataFile(), STATIC_DIR);
     context = buildContext();
@@ -333,7 +395,8 @@ async function selfCheck() {
       + " signedIn: !document.getElementById('app').classList.contains('hidden'),"
       + " content: (document.getElementById('content') || {}).innerHTML || '',"
       + " loginShown: !document.getElementById('login-screen').classList.contains('hidden'),"
-      + " chip: (document.getElementById('cloud-text') || {}).textContent || ''"
+      + " chip: (document.getElementById('cloud-text') || {}).textContent || '',"
+      + " sharing: Boolean(document.getElementById('sync-chip'))"
       + "})";
 
     let view = await mainWindow.webContents.executeJavaScript(probe);
@@ -352,6 +415,7 @@ async function selfCheck() {
       `${view.content.length} chars`);
     record("nothing claims a cloud or a server is missing",
       !/fail|unreachable|offline|error/i.test(view.chip), view.chip);
+    record("the sharing control is present", view.sharing);
     record("the dashboard shows real figures",
       /Stock value|Receivables|Sales this month/i.test(view.content),
       view.content.slice(0, 120).replace(/\s+/g, " "));

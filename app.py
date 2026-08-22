@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import appwrite_client
 import db
+import sync
 import xlsx
 
 # Frozen builds unpack their files to a temporary directory (sys._MEIPASS);
@@ -2112,6 +2113,71 @@ def appwrite_ping(ctx):
     """Called automatically when the app opens, to verify the Appwrite setup."""
     ctx.require_user()
     return appwrite_client.client.status()
+
+
+# --------------------------------------------------------------------------
+# Sharing with the office desktop
+# --------------------------------------------------------------------------
+
+@route("POST", r"/api/sync")
+def sync_exchange(ctx):
+    """One round trip. The desktop sends what changed on that computer and a
+    list of everything it currently holds; it gets back whatever it is missing
+    or holds a stale copy of."""
+    ctx.require_user()
+    conn = ctx.conn
+    incoming = ctx.body.get("changes") or []
+    graves = ctx.body.get("tombstones") or []
+    theirs = ctx.body.get("holding") or {}
+
+    # Rows written here since the last exchange have no uid yet; give them one
+    # or they would be invisible to the snapshot and would never travel.
+    db.stamp_uids(conn)
+
+    before = sync.snapshot(conn)
+    agreed = sync.shadow_of(conn)
+
+    # Anything changed here since the last exchange has to be known before the
+    # merge, or a change of ours would be treated as an untouched row and
+    # quietly overwritten by theirs.
+    mine = sync.local_changes(conn, before, agreed)
+    my_graves = sync.local_tombstones(conn, before, agreed)
+
+    conflicts = sync.apply_incoming(conn, incoming, graves, before, agreed)
+    sync.recount_stock(conn)
+
+    after = sync.snapshot(conn)
+    send, send_graves = [], list(my_graves)
+    for entity, rows in after.items():
+        held = theirs.get(entity, {})
+        for uid, record in rows.items():
+            if held.get(uid) != record["hash"]:
+                send.append({"entity": entity, "uid": uid, "body": record["body"],
+                             "hash": record["hash"], "updated_at": record["updated_at"]})
+    # Tell them about rows they still hold that are gone from here.
+    known_graves = {(g["entity"], g["uid"]) for g in send_graves}
+    for entity, held in theirs.items():
+        for uid in held:
+            if uid in after.get(entity, {}) or (entity, uid) in known_graves:
+                continue
+            row = conn.execute(
+                "SELECT deleted_at FROM tombstones WHERE entity = ? AND uid = ?",
+                (entity, uid)).fetchone()
+            if row:
+                send_graves.append({"entity": entity, "uid": uid,
+                                    "deleted_at": row["deleted_at"]})
+
+    sync.record_agreement(conn, after)
+    return {"ok": True, "at": sync.now(), "changes": send, "tombstones": send_graves,
+            "conflicts": conflicts, "received": len(incoming),
+            "accepted": len(incoming) - len([c for c in conflicts if c["kept"] == "local"])}
+
+
+@route("GET", r"/api/sync/conflicts")
+def sync_conflicts(ctx):
+    ctx.require_user()
+    return rows(ctx.conn.execute(
+        "SELECT * FROM sync_conflicts ORDER BY id DESC LIMIT 100"))
 
 
 @route("GET", r"/api/backup")

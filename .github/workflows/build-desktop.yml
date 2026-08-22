@@ -22,6 +22,10 @@ jobs:
         with:
           node-version: "22"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install
         working-directory: electron
         run: npm install --no-audit --no-fund
@@ -33,6 +37,13 @@ jobs:
       - name: Every operation must still behave
         working-directory: electron
         run: node test/operations.js
+
+      # Runs the real Python server and the real desktop client against each
+      # other over HTTP. Nothing is mocked, so this is the only way to know the
+      # two halves of sharing actually agree.
+      - name: The desktop and the cloud must share without losing anything
+        working-directory: electron
+        run: node test/sharing.js
 
       - name: Build the installer and the portable program
         working-directory: electron

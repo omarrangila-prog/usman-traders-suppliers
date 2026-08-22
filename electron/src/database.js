@@ -3,7 +3,8 @@
 // and the main process reads the file.
 
 import { DatabaseSync } from "node:sqlite";
-import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual }
+  from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -39,6 +40,61 @@ class Db {
 
   exec(sql) { this.raw.exec(sql); }
   close() { this.raw.close(); }
+}
+
+// -------------------------------------------------------------- identity
+//
+// The tables whose rows travel between this computer and the cloud. Child rows
+// (order_items, journal_lines) travel with their parent as one piece, so their
+// own numbering stays a purely local matter.
+
+export const SYNCED_TABLES = [
+  "customers", "suppliers", "products", "accounts", "fixed_assets",
+  "orders", "invoices", "purchases", "journal_entries", "field_entries",
+  "stock_moves", "company",
+];
+
+// Rows both sides create for themselves on first run. Deriving the uid from the
+// business key means the two installations arrive at the same one without ever
+// having spoken, so the first sync does not produce two of every item.
+export const SEEDED_KEYS = {
+  products: "sku",
+  suppliers: "code",
+  accounts: "code",
+};
+
+// Tables holding exactly one row. There is only ever one company, so both sides
+// must land on the same uid for it or a merge would try to file a second one.
+export const SINGLETONS = new Set(["company"]);
+
+/** A uid both sides work out independently. Must match db.py exactly. */
+export function derivedUid(entity, key) {
+  const d = createHash("sha1").update(`usmantraders:${entity}:${key}`).digest("hex");
+  return `${d.slice(0, 8)}-${d.slice(8, 12)}-${d.slice(12, 16)}-${d.slice(16, 20)}-${d.slice(20, 32)}`;
+}
+
+/** A uid for a row a person just created. */
+export function newUid() {
+  return randomUUID();
+}
+
+export function syncNow() {
+  return new Date().toISOString().replace(/\.\d+Z$/, "");
+}
+
+/** Give a uid and a timestamp to any row that predates sharing. */
+export function stampUids(db) {
+  const now = syncNow();
+  for (const table of SYNCED_TABLES) {
+    const key = SEEDED_KEYS[table];
+    const rows = db.all(
+      `SELECT id${key ? `, ${key}` : ""} FROM ${table} WHERE uid IS NULL OR uid = ''`);
+    for (const row of rows) {
+      const uid = SINGLETONS.has(table) ? derivedUid(table, "the-one")
+        : key && row[key] ? derivedUid(table, row[key]) : newUid();
+      db.run(`UPDATE ${table} SET uid = ?, updated_at = ? WHERE id = ?`, [uid, now, row.id]);
+    }
+  }
 }
 
 export function hashPassword(password, salt = null) {
@@ -82,6 +138,12 @@ function addMissingColumns(db) {
     customers: [["code", "TEXT NOT NULL DEFAULT ''"]],
     suppliers: [["code", "TEXT NOT NULL DEFAULT ''"]],
   };
+  for (const table of SYNCED_TABLES) {
+    wanted[table] = (wanted[table] || []).concat([
+      ["uid", "TEXT NOT NULL DEFAULT ''"],
+      ["updated_at", "TEXT NOT NULL DEFAULT ''"],
+    ]);
+  }
   for (const [table, columns] of Object.entries(wanted)) {
     const existing = new Set(db.all(`PRAGMA table_info(${table})`).map((r) => r.name));
     for (const [column, spec] of columns) {
@@ -165,6 +227,7 @@ export function open(file, assetDir) {
   db.exec(SCHEMA);
   addMissingColumns(db);
   seed(db, assetDir);
+  stampUids(db);
   handle = db;
   return db;
 }
