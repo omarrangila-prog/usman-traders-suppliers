@@ -2617,6 +2617,18 @@ function applyBranding() {
 async function pingAppwrite() {
   const chip = el("cloud-chip");
   const label = el("cloud-text");
+
+  // The desktop program has no cloud to reach. Reporting a failed cloud check
+  // would be alarming and untrue, so it says where the data actually is.
+  if (DESKTOP) {
+    const place = await window.usmanTraders.where();
+    chip.className = "cloud-chip ok";
+    label.textContent = "Saved on this computer";
+    chip.title = place.data;
+    chip.onclick = () => window.usmanTraders.reveal(place.data);
+    return;
+  }
+
   try {
     const info = await api("/appwrite/ping");
     state.appwrite = info;

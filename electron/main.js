@@ -330,7 +330,8 @@ async function selfCheck() {
       + " navLinks: document.querySelectorAll('#nav a, #nav button').length,"
       + " signedIn: !document.getElementById('app').classList.contains('hidden'),"
       + " content: (document.getElementById('content') || {}).innerHTML || '',"
-      + " loginShown: !document.getElementById('login-screen').classList.contains('hidden')"
+      + " loginShown: !document.getElementById('login-screen').classList.contains('hidden'),"
+      + " chip: (document.getElementById('cloud-text') || {}).textContent || ''"
       + "})";
 
     let view = await mainWindow.webContents.executeJavaScript(probe);
@@ -347,6 +348,8 @@ async function selfCheck() {
     record("a page rendered, not a spinner or an error",
       view.content.length > 400 && !view.content.includes("Loading..."),
       `${view.content.length} chars`);
+    record("nothing claims a cloud or a server is missing",
+      !/fail|unreachable|offline|error/i.test(view.chip), view.chip);
     record("the dashboard shows real figures",
       /Stock value|Receivables|Sales this month/i.test(view.content),
       view.content.slice(0, 120).replace(/\s+/g, " "));
