@@ -38,7 +38,7 @@ not because anything is wrong with it.
 One file on that computer:
 
 ```
-C:\Users\<you>\AppData\Roaming\usman-traders\usmantraders.db
+C:\Users\<you>\AppData\Roaming\Usman Traders & Suppliers\usmantraders.db
 ```
 
 The program tells you the exact path under **Help → About**, and the sidebar
