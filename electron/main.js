@@ -371,12 +371,22 @@ async function selfCheck() {
     record("the data file is on this computer", Boolean(where.data), where.data);
     record("the data file was written", fs.existsSync(dataFile()), dataFile());
 
-    // Proves the window is genuinely painting, not merely constructed.
-    const shot = await mainWindow.webContents.capturePage();
-    const png = shot.toPNG();
-    record("the window is actually drawing", png.length > 5000, `${png.length} bytes`);
+    // Proves the window is genuinely painting, not merely constructed. The
+    // compositor can hand back a blank frame if it is asked at the wrong
+    // moment, so take the best of a few tries rather than trusting one.
+    let png = Buffer.alloc(0);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const shot = (await mainWindow.webContents.capturePage()).toPNG();
+      if (shot.length > png.length) png = shot;
+      if (png.length > 20000) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    record("the window is actually drawing", png.length > 20000, `${png.length} bytes`);
     const target = process.env.UT_SHOT;
-    if (target) { fs.writeFileSync(target, png); console.log(`  screenshot: ${target}`); }
+    if (target && png.length) {
+      fs.writeFileSync(target, png);
+      console.log(`  screenshot: ${target}`);
+    }
   } catch (err) {
     record("self check completed", false, err.message);
   }
