@@ -14,7 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { open } from "../src/database.js";
 import { dispatch, AppError } from "../src/core.js";
-import { exchange, snapshot } from "../src/sync.js";
+import { exchange, snapshot, pullBookings } from "../src/sync.js";
 import { reporter } from "./harness.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -237,6 +237,39 @@ try {
     desktop("GET", "/api/orders").some((o) => o.total === 100)
     && desktop("GET", "/api/orders").some((o) => o.total === 210),
     desktop("GET", "/api/orders").map((o) => o.total).join(","));
+
+  r.section("bringing in bookings from a web site too old to share");
+  // Until the web site is updated it cannot share fully, but the bookings are
+  // still readable through the part of it that has always been there.
+  cloudCall("POST", "/api/field/sync", { device: "phone-2", entries: [
+    { client_id: "old-1", kind: "Booking", party_name: "Nosheen General St",
+      phone: "03153939853", entry_date: "2026-08-15",
+      items: [{ sku: "00001", qty: 24, price: 10 }] },
+    { client_id: "old-2", kind: "Booking", party_name: "Hassnain Store",
+      phone: "03166659730", entry_date: "2026-08-15",
+      items: [{ sku: "00062", qty: 2, price: 350 }] }] });
+  const heldBefore = countDesk("field/entries");
+  const pulled = await pullBookings(desk, account);
+  r.check("the bookings came in", pulled.added >= 2, JSON.stringify(pulled));
+  r.check("they are on the desktop",
+    desktop("GET", "/api/field/entries").some((e) => e.party_name === "Nosheen General St"));
+  r.check("with the shop's phone number",
+    desktop("GET", "/api/field/entries")
+      .find((e) => e.party_name === "Hassnain Store").phone === "03166659730");
+  r.check("and their items",
+    desktop("GET", "/api/field/entries")
+      .find((e) => e.party_name === "Hassnain Store").items[0].qty === 2);
+  const again = await pullBookings(desk, account);
+  r.check("doing it twice does not duplicate them",
+    again.added === 0 && countDesk("field/entries") === heldBefore + pulled.added,
+    `added ${again.added}, holding ${countDesk("field/entries")}`);
+  const fresh = desktop("GET", "/api/field/entries")
+    .find((e) => e.party_name === "Nosheen General St");
+  const asOrder = desktop("POST", `/api/field/entries/${fresh.id}/convert`);
+  r.check("one can be turned into a real order",
+    String(asOrder.number || "").startsWith("ORD"), asOrder.number);
+  r.check("and the shop became a customer",
+    desktop("GET", "/api/customers").some((c) => c.name === "Nosheen General St"));
 
   r.section("the books survive it all");
   await exchange(desk, account);

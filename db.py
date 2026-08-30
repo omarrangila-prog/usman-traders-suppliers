@@ -936,11 +936,14 @@ def init():
 
 
 def next_number(conn, table, column, prefix):
-    """Generate the next sequential document number, e.g. INV-0007."""
-    row = conn.execute(f"SELECT {column} n FROM {table} ORDER BY id DESC LIMIT 1").fetchone()
-    seq = 1
-    if row and row["n"] and "-" in row["n"]:
-        tail = row["n"].rsplit("-", 1)[-1]
-        if tail.isdigit():
-            seq = int(tail) + 1
-    return f"{prefix}-{seq:04d}"
+    """Generate the next sequential document number, e.g. INV-0007.
+
+    Takes the highest number in use rather than whichever row happens to be
+    last. Rows arriving from the other machine are written in whatever order
+    the merge reaches them, so the newest id is not the highest number - and
+    looking at the last row would hand out a number already on a document."""
+    row = conn.execute(
+        f"SELECT MAX(CAST(SUBSTR({column}, ?) AS INTEGER)) AS n FROM {table} "
+        f"WHERE {column} LIKE ?", (len(prefix) + 2, prefix + "-%")).fetchone()
+    highest = (row["n"] if row else None) or 0
+    return f"{prefix}-{int(highest) + 1:04d}"

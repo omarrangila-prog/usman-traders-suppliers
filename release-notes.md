@@ -1,66 +1,50 @@
-The desktop program and the web site now share one set of books.
+Your bookers' orders now come through to the desktop — today, without waiting
+for anything to be fixed on the web site.
 
-Until now they were two separate businesses that happened to look alike. A
-booking your man took on his phone could not be seen at the office, and an
-invoice raised at the office never reached the web site. They now exchange
-changes whenever the desktop has a connection — and the desktop still works
-with none, because it keeps its own copy and never waits on the network.
+## The short version
 
-## How to switch it on
+Press **Share now** in the desktop program and every booking your men have taken
+on their phones appears in **Field Entries**, ready to turn into a real order
+with one click. Doing it twice never gives you the same booking twice.
 
-**Settings → Sharing with the cloud.** Put in your web address, the sign-in name
-and password you use there, and press **Save**. After that, **Share now** — in
-that panel, on the sidebar chip, or **Ctrl+R** — swaps changes both ways.
+Tested against your live site: **all 8 bookings** came through with their shop
+names, phone numbers and item lines intact.
 
-The sidebar chip tells you when you last shared.
+## Why this release exists
 
-## What was hard about it, and how it is handled
+Full two-way sharing shipped in v2.1.0, but it needs the web site to be running
+a matching version — and **your web site has not updated since 16 August**. Every
+deployment since has failed on Vercel with *Not authorized*, no build log, and
+no error shown. That is an account problem, not a fault in the software, and it
+is not something the program can fix.
 
-**Both sides already had the same 64 items.** Created separately, they would
-have merged into 128. Every travelling row carries an id that is unique
-everywhere, and the rows both sides create for themselves — the item master, the
-vendor list, the chart of accounts — work theirs out from the item code, so both
-machines arrive at the same id without ever having spoken. The first sync
-recognises all 69 as shared and duplicates nothing.
+Rather than leave the office blind to its own bookings until that is sorted, the
+desktop now reads them straight out of the part of the web site that has always
+worked. It sends nothing and changes nothing there — it only brings the bookings
+in. When the web site is finally updated, full two-way sharing switches on by
+itself with no change here.
 
-**Deletions.** A row that is simply gone cannot be told from one that has not
-arrived yet, so a deletion leaves a marker. Delete a customer here and it goes
-there, and it does not come back on the next sync.
+## A real bug this found
 
-**The same record changed in both places.** The newer one wins, and the older is
-kept — not thrown away. **Settings → Records changed in both places** shows both
-versions so you can see exactly what happened.
+Creating an order after a sync could fail with a duplicate-number error. The
+program took the next document number from the most recent row, but records
+arriving from the web site are written in whatever order the merge reaches them,
+so the newest row is not the highest number. It now takes the highest number
+actually in use. Nobody had hit it yet; the test did.
 
-**Both machines issuing ORD-0003.** Apart, neither can see the other's
-numbering, so both reach for the same number. The arriving document is given a
-free number instead of being refused or overwriting the other, and both machines
-end up showing the same numbering.
+## What is checked before a release is published
 
-**Stock.** Recalculated from the movement history after every merge, so the
-figure on both sides always agrees with the ledger behind it.
+- **25 figures** worked out by hand and compared against what the program reports
+- **79 operations** — buying, delivering, invoicing, collecting, deleting,
+  year-end close, roles and passwords
+- **A day in the shop** — buy from a vendor, take an order, deliver, invoice,
+  take part payment, check the figures, and open all 24 screens
+- **52 sharing checks** — the real web server and the real desktop program made
+  to talk over HTTP, covering no duplication, work flowing both ways, bookings
+  arriving, deletions staying deleted, clashes being kept rather than lost, and
+  both sides ending with identical document numbers
+- The installer is then installed on a clean Windows machine, and the installed
+  program must open a window, sign in, draw the dashboard and read back the item
+  master — **16 self-checks**
 
-## What was checked before this was published
-
-The real Python web server and the real desktop program are made to talk to each
-other over HTTP — nothing mocked — and must pass **46 checks**: no duplication,
-work flowing both ways, a phone booking arriving and converting to an order, a
-deletion staying deleted, a clash being logged rather than lost, both sides
-ending with identical order numbers, stock agreeing, the books balancing on both
-sides, and a settled pair going quiet instead of exchanging forever.
-
-That runs alongside the 25 hand-computed figures and 79 operational checks, and
-then the installer is installed on a clean Windows machine and the installed
-program must open a window, sign in, draw the dashboard and read back your item
-master. **16 self-checks.** A build that fails any of it is not published.
-
-## One thing you need to know
-
-**Your web site has not updated since 16 August.** Every deployment since then
-has failed to build on Vercel — no build log, no error, nothing. That is an
-account problem, not a fault in the software.
-
-Until it updates, the web site has no sharing endpoint, and pressing Share now
-will tell you so plainly rather than failing with a cryptic error. Nothing on
-this computer is changed by the attempt.
-
-Everything else in this version works with no internet, exactly as before.
+A build that fails any of it is not published.

@@ -110,15 +110,20 @@ export function verifyPassword(password, storedHash, salt) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Next sequential document number, e.g. INV-0007. */
+/**
+ * Next sequential document number, e.g. INV-0007.
+ *
+ * Takes the highest number in use rather than whichever row happens to be last.
+ * Rows arriving from the cloud are written in whatever order the merge reaches
+ * them, so the newest id is not the highest number - and looking at the last
+ * row would hand out a number already on a document.
+ */
 export function nextNumber(db, table, column, prefix) {
-  const row = db.get(`SELECT ${column} AS n FROM ${table} ORDER BY id DESC LIMIT 1`);
-  let seq = 1;
-  if (row && row.n && row.n.includes("-")) {
-    const tail = row.n.slice(row.n.lastIndexOf("-") + 1);
-    if (/^\d+$/.test(tail)) seq = parseInt(tail, 10) + 1;
-  }
-  return `${prefix}-${String(seq).padStart(4, "0")}`;
+  const row = db.get(
+    `SELECT MAX(CAST(SUBSTR(${column}, ?) AS INTEGER)) AS n FROM ${table} ` +
+    `WHERE ${column} LIKE ?`, [prefix.length + 2, `${prefix}-%`]);
+  const highest = (row && row.n) || 0;
+  return `${prefix}-${String(Number(highest) + 1).padStart(4, "0")}`;
 }
 
 function defaultLogo(assetDir) {

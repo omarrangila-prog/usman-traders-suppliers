@@ -446,9 +446,17 @@ export async function exchange(db, account) {
   }, signIn.cookie);
   if (reply.status === 404 || /No API endpoint/i.test(reply.payload.error || "")) {
     // The address is right and the sign-in worked, so this is an older copy of
-    // the web site that predates sharing. Saying so is more use than the 404.
-    throw new Error("That web site is running an older version that cannot share yet. "
-      + "Update the web site, then try again. Nothing here has been changed.");
+    // the web site that predates sharing. Rather than stop, bring in the
+    // bookings - which that version can still hand over - and say what happened.
+    const pulled = await pullBookings(db, account);
+    return {
+      ok: true, at: now(), limited: true,
+      sent: 0, sent_deletions: 0, received: pulled.added, received_deletions: 0,
+      conflicts: [],
+      note: "The web site is running an older version that cannot share fully yet, "
+        + `so only the field bookings were brought in (${pulled.added} new, `
+        + `${pulled.already} already here). Nothing was sent to it.`,
+    };
   }
   if (reply.status !== 200) {
     throw new Error(reply.payload.error || `The cloud answered ${reply.status}.`);
@@ -487,4 +495,72 @@ export async function exchange(db, account) {
 export function lastSync(db) {
   const row = db.get("SELECT value FROM sync_state WHERE key = 'last_sync'");
   return row ? row.value : null;
+}
+
+// ------------------------------------------------- when the web site is older
+//
+// Full sharing needs the web site to be running a version that knows about it.
+// Until it is, the bookings your men are taking on their phones are still
+// readable through the part of the web site that has always been there - so
+// they can at least be brought in one way, rather than the office being blind
+// to them. This asks for nothing the old site cannot answer.
+
+async function get(base, path, cookie) {
+  const res = await fetch(base.replace(/\/$/, "") + path, {
+    headers: cookie ? { Cookie: cookie } : {},
+  });
+  const raw = await res.text();
+  try { return { status: res.status, payload: raw ? JSON.parse(raw) : null }; }
+  catch { return { status: res.status, payload: null }; }
+}
+
+/**
+ * Bring in bookings taken in the field, without full sharing.
+ *
+ * client_id is generated on the phone and is unique, so a booking already here
+ * is recognised and skipped - running this twice cannot produce two of the same
+ * booking. Nothing is sent, and nothing here is changed or removed.
+ */
+export async function pullBookings(db, account) {
+  const { url, username, password } = account;
+  const signIn = await post(url, "/api/login", { username, password }, null);
+  if (signIn.status !== 200) {
+    throw new Error(signIn.payload.error || "The web site refused the username or password.");
+  }
+  const listed = await get(url, "/api/field/entries", signIn.cookie);
+  if (listed.status !== 200 || !Array.isArray(listed.payload)) {
+    throw new Error("The web site did not return the bookings.");
+  }
+
+  let added = 0;
+  let already = 0;
+  db.raw.exec("BEGIN");
+  try {
+    for (const entry of listed.payload) {
+      if (!entry.client_id) continue;
+      if (db.get("SELECT 1 FROM field_entries WHERE client_id = ?", [entry.client_id])) {
+        already += 1;
+        continue;
+      }
+      const items = typeof entry.items === "string"
+        ? entry.items : JSON.stringify(entry.items || []);
+      db.run(
+        `INSERT INTO field_entries (client_id, kind, party_name, phone, city, entry_date,
+                                    notes, items, total, device, captured_at, status)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [entry.client_id, entry.kind || "Booking", entry.party_name || "", entry.phone || "",
+          entry.city || "", entry.entry_date || "", entry.notes || "", items,
+          Number(entry.total) || 0, entry.device || "", entry.captured_at || "",
+          // however it was marked there, it is new work here until reviewed
+          entry.status === "Rejected" ? "Rejected" : "Pending"]);
+      added += 1;
+    }
+    db.run(`INSERT INTO sync_state (key, value) VALUES ('last_pull', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [now()]);
+    db.raw.exec("COMMIT");
+  } catch (err) {
+    db.raw.exec("ROLLBACK");
+    throw new Error(`Nothing was changed: ${err.message}`);
+  }
+  return { added, already, total: listed.payload.length };
 }

@@ -38,6 +38,10 @@ jobs:
         working-directory: electron
         run: node test/operations.js
 
+      - name: A day in the shop must work end to end
+        working-directory: electron
+        run: node test/a-day-in-the-shop.js
+
       # Runs the real Python server and the real desktop client against each
       # other over HTTP. Nothing is mocked, so this is the only way to know the
       # two halves of sharing actually agree.
