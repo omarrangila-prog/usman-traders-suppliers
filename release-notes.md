@@ -1,57 +1,45 @@
-A check over the whole thing, and two more faults fixed.
+The prompt demanding a password on start-up is gone, at the owner's request.
 
-## The password it ships with
+Signing in goes straight to the dashboard as it did before. The password can
+still be changed whenever you want, from **Company Profile → Change password**.
 
-Every copy of this program has been installed knowing **admin123**, and that
-password is printed in the instructions. Until someone changed it, anyone who
-could reach the machine was an administrator with the run of the books.
+Nothing else about sign-in changed: accounts, roles and the login screen work
+exactly as they did.
 
-The program now refuses to show anything until a real password is chosen. The
-prompt appears on the first sign-in, has no cancel and no way around it, and
-will not accept the old password. Once set it never asks again — and staff
-accounts, whose passwords were chosen by a person, are never nagged.
+## Also in this version
 
-## The red warning that meant nothing
+The web site is finally deploying again after a fortnight stuck on 16 August
+code. Two faults had to be fixed to get it there, both mine:
 
-The web site showed **"Cloud check failed"** in the corner, permanently. It was
-checking Appwrite — a service this software stopped storing anything in long
-ago, and whose project has since been paused for inactivity. Your data has been
-in the cloud database the whole time.
+**The site crashed on every request.** The read-only-folder fallback written for
+the Windows program runs while the code is being loaded, and a hosted server has
+no home directory to create one in. With a database configured it no longer goes
+looking for a folder at all. A test now reproduces a hosted server — read-only
+filesystem, no home directory — so this cannot come back.
 
-So the shop was being shown a red alarm about something neither true nor
-actionable. The check is gone, along with the code behind it, and the corner now
-says where the data actually is: **Saved in the cloud** on the web site,
-**Saved on this computer** on the desktop.
+**Sharing could not run on the hosted database.** Inserts have `RETURNING id`
+appended so the caller learns the new row's number, but the three sharing tables
+are keyed by entity and uid and have no `id` column, so every insert into them
+was refused.
 
-## One I caused, and the tests caught
+Full two-way sharing is now live and was proved against the real site: a fresh
+office computer joined, sent 90 records, received all 8 field bookings with
+their shop names and phone numbers, and a second sync moved nothing and
+duplicated nothing.
 
-Removing that Appwrite check also removed the sharing endpoints, which sat next
-to it in the same file. Bookings would have stopped coming through entirely. The
-sharing tests failed immediately, which is what they are for. Restored, and
-every suite passes again.
+## Why the web site was stuck
 
-## What was checked
+Not the software. Vercel refuses a deployment whose **commit author** is not a
+member of the project's team, and a Hobby plan cannot have members. The commits
+were authored under one address while the project belongs to another account,
+so every push since 16 August was rejected before the build began — which is
+why they showed no log, no error, and a build time of zero. Commits are now
+authored under the account that owns the project, and deployments take about
+ten seconds.
 
-| | |
-| --- | --- |
-| Figures worked out by hand | 26 |
-| Operations | 81 |
-| A day in the shop, all 24 screens | 48 |
-| The password it ships with | 8 |
-| Sharing between desktop and cloud | 54 |
-| Awkward situations | 30 |
-| Python web server, with and without the login screen | all passing |
-| The installed program on a clean Windows machine | 16 |
+## Worth knowing
 
-Every page the web site serves was requested and answers properly, and the
-offline booking form still caches all 64 items for a phone with no signal.
-
-## Still outstanding, and not fixable from here
-
-**Your web site has not updated since 16 August.** Vercel refuses every
-deployment with *Not authorized* — no build log, no error. Bookings still reach
-the desktop through **Share now**, but invoices raised at the office cannot
-travel out to the web site until that is sorted.
-
-**The repository is private**, so these download links ask for a GitHub login.
-Send your client the .exe directly, or make the repository public.
+The password the software ships with, **admin123**, still opens any installation
+where it has not been changed — including the live web site, which is reachable
+from the public repository. Changing it is now entirely up to whoever runs the
+business.

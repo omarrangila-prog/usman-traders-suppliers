@@ -102,12 +102,7 @@ def login(ctx):
 
     ctx.set_cookie = db.make_token(ctx.conn, user["id"])
     return {"user": {"id": user["id"], "username": user["username"],
-                     "full_name": user["full_name"], "role": user["role"]},
-            # Every copy of this program ships knowing the same first password.
-            # Left alone on a shop counter it is not a password at all, so the
-            # app insists on a real one before it will show the books.
-            "must_change_password": db.verify_password(
-                DEFAULT_PASSWORD, user["password_hash"], user["salt"])}
+                     "full_name": user["full_name"], "role": user["role"]}}
 
 
 @route("POST", r"/api/logout")
@@ -120,9 +115,7 @@ def logout(ctx):
 def me(ctx):
     ctx.require_user()
     return {"user": {"id": ctx.user["id"], "username": ctx.user["username"],
-                     "full_name": ctx.user["full_name"], "role": ctx.user["role"]},
-            "must_change_password": db.verify_password(
-                DEFAULT_PASSWORD, ctx.user["password_hash"], ctx.user["salt"])}
+                     "full_name": ctx.user["full_name"], "role": ctx.user["role"]}}
 
 
 @route("POST", r"/api/me/password")
@@ -203,8 +196,6 @@ def delete_user(ctx, user_id):
 # --------------------------------------------------------------------------
 # Company profile
 # --------------------------------------------------------------------------
-
-DEFAULT_PASSWORD = "admin123"
 
 COMPANY_FIELDS = ["name", "tagline", "logo", "address", "city", "phone",
                   "email", "website", "tax_id", "currency", "footer"]

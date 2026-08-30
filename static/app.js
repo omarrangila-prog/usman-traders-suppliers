@@ -112,19 +112,19 @@ function toast(message, kind) {
 function closeModal() { el("modal-root").innerHTML = ""; }
 
 /** Open a modal. `render` returns HTML; `onSubmit(form)` runs on save. */
-function modal({ title, body, submitLabel, onSubmit, wide, footer, locked }) {
+function modal({ title, body, submitLabel, onSubmit, wide, footer }) {
   el("modal-root").innerHTML = `
     <div class="modal-backdrop">
       <form class="modal ${wide ? "wide" : ""}">
         <div class="modal-head"><h2>${h(title)}</h2>
-          ${locked ? "" : `<button type="button" class="icon-btn" data-close>&times;</button>`}</div>
+          <button type="button" class="icon-btn" data-close>&times;</button></div>
         <div class="modal-body">
           <div class="form-error hidden" data-error></div>
           ${body}
         </div>
         <div class="modal-foot">
           ${footer || ""}
-          ${locked ? "" : `<button type="button" class="btn" data-close>Cancel</button>`}
+          <button type="button" class="btn" data-close>Cancel</button>
           ${onSubmit ? `<button type="submit" class="btn btn-primary">${h(submitLabel || "Save")}</button>` : ""}
         </div>
       </form>
@@ -133,11 +133,9 @@ function modal({ title, body, submitLabel, onSubmit, wide, footer, locked }) {
   const root = el("modal-root");
   const form = $("form", root);
   root.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeModal));
-  if (!locked) {
-    $(".modal-backdrop", root).addEventListener("mousedown", (e) => {
-      if (e.target === e.currentTarget) closeModal();
-    });
-  }
+  $(".modal-backdrop", root).addEventListener("mousedown", (e) => {
+    if (e.target === e.currentTarget) closeModal();
+  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2602,45 +2600,6 @@ async function viewCompany() {
   });
 }
 
-/**
- * Insists on a real password before the books are shown.
- *
- * Every copy of this program ships knowing admin123, and it is printed in the
- * instructions. Until it is changed, anyone who reaches the machine is an
- * administrator. This prompt has no cancel and no way round it, which is the
- * whole point of it.
- */
-function forcePasswordChange() {
-  modal({
-    locked: true,
-    title: "Choose a password before you start",
-    body: `
-      <p class="muted" style="margin-top:0">This program is still using the password
-        it was installed with. It is the same on every copy and it is printed in the
-        instructions, so it protects nothing. Choose one only you know.</p>
-      <input type="hidden" name="current_password" value="admin123">
-      <label class="field">New password (6 characters or more)
-        <input type="password" name="new_password" minlength="6" required></label>
-      <label class="field" style="margin-top:14px">Type it again
-        <input type="password" name="again" minlength="6" required></label>`,
-    submitLabel: "Set my password",
-    onSubmit: async (form) => {
-      const values = formValues(form);
-      if (values.new_password !== values.again) {
-        throw new Error("The two passwords do not match.");
-      }
-      if (values.new_password === "admin123") {
-        throw new Error("Please choose something other than the password it came with.");
-      }
-      await api("/me/password", { method: "POST", body: {
-        current_password: values.current_password,
-        new_password: values.new_password,
-      } });
-      toast("Password set. Keep it somewhere safe.", "success");
-    },
-  });
-}
-
 function passwordModal() {
   modal({
     title: "Change password",
@@ -2887,7 +2846,7 @@ function setOfflineNotice(offline) {
   });
 }
 
-async function showApp(user, mustChangePassword) {
+async function showApp(user) {
   state.user = user;
   state.company = await api("/company");
   applyBranding();
@@ -2904,8 +2863,6 @@ async function showApp(user, mustChangePassword) {
   router();
   showStorage();
   refreshSyncChip();
-  // Do this last, so it sits over a screen that has already drawn.
-  if (mustChangePassword) forcePasswordChange();
 }
 
 el("login-form").addEventListener("submit", async (e) => {
@@ -2918,7 +2875,7 @@ el("login-form").addEventListener("submit", async (e) => {
     const result = await api("/login", { method: "POST", body: formValues(e.target) });
     e.target.reset();
     state.products = [];
-    await showApp(result.user, result.must_change_password);
+    await showApp(result.user);
   } catch (err) {
     errorBox.textContent = err.message;
     errorBox.classList.remove("hidden");
@@ -2999,7 +2956,7 @@ if (!DESKTOP && "serviceWorker" in navigator) {
 (async function boot() {
   try {
     const me = await api("/me");
-    await showApp(me.user, me.must_change_password);
+    await showApp(me.user);
   } catch (err) {
     let offline = err.offline === true;
     try {

@@ -54,10 +54,6 @@ jobs:
         working-directory: electron
         run: node test/sharing.js
 
-      - name: The shipped password must not be allowed to stand
-        working-directory: electron
-        run: node test/first-password.js
-
       # Deleting on one machine what another is still using, a third computer
       # joining, three at once, and a machine whose clock is wrong.
       - name: Awkward situations must not break it
