@@ -112,19 +112,19 @@ function toast(message, kind) {
 function closeModal() { el("modal-root").innerHTML = ""; }
 
 /** Open a modal. `render` returns HTML; `onSubmit(form)` runs on save. */
-function modal({ title, body, submitLabel, onSubmit, wide, footer }) {
+function modal({ title, body, submitLabel, onSubmit, wide, footer, locked }) {
   el("modal-root").innerHTML = `
     <div class="modal-backdrop">
       <form class="modal ${wide ? "wide" : ""}">
         <div class="modal-head"><h2>${h(title)}</h2>
-          <button type="button" class="icon-btn" data-close>&times;</button></div>
+          ${locked ? "" : `<button type="button" class="icon-btn" data-close>&times;</button>`}</div>
         <div class="modal-body">
           <div class="form-error hidden" data-error></div>
           ${body}
         </div>
         <div class="modal-foot">
           ${footer || ""}
-          <button type="button" class="btn" data-close>Cancel</button>
+          ${locked ? "" : `<button type="button" class="btn" data-close>Cancel</button>`}
           ${onSubmit ? `<button type="submit" class="btn btn-primary">${h(submitLabel || "Save")}</button>` : ""}
         </div>
       </form>
@@ -133,9 +133,11 @@ function modal({ title, body, submitLabel, onSubmit, wide, footer }) {
   const root = el("modal-root");
   const form = $("form", root);
   root.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeModal));
-  $(".modal-backdrop", root).addEventListener("mousedown", (e) => {
-    if (e.target === e.currentTarget) closeModal();
-  });
+  if (!locked) {
+    $(".modal-backdrop", root).addEventListener("mousedown", (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+  }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2600,6 +2602,45 @@ async function viewCompany() {
   });
 }
 
+/**
+ * Insists on a real password before the books are shown.
+ *
+ * Every copy of this program ships knowing admin123, and it is printed in the
+ * instructions. Until it is changed, anyone who reaches the machine is an
+ * administrator. This prompt has no cancel and no way round it, which is the
+ * whole point of it.
+ */
+function forcePasswordChange() {
+  modal({
+    locked: true,
+    title: "Choose a password before you start",
+    body: `
+      <p class="muted" style="margin-top:0">This program is still using the password
+        it was installed with. It is the same on every copy and it is printed in the
+        instructions, so it protects nothing. Choose one only you know.</p>
+      <input type="hidden" name="current_password" value="admin123">
+      <label class="field">New password (6 characters or more)
+        <input type="password" name="new_password" minlength="6" required></label>
+      <label class="field" style="margin-top:14px">Type it again
+        <input type="password" name="again" minlength="6" required></label>`,
+    submitLabel: "Set my password",
+    onSubmit: async (form) => {
+      const values = formValues(form);
+      if (values.new_password !== values.again) {
+        throw new Error("The two passwords do not match.");
+      }
+      if (values.new_password === "admin123") {
+        throw new Error("Please choose something other than the password it came with.");
+      }
+      await api("/me/password", { method: "POST", body: {
+        current_password: values.current_password,
+        new_password: values.new_password,
+      } });
+      toast("Password set. Keep it somewhere safe.", "success");
+    },
+  });
+}
+
 function passwordModal() {
   modal({
     title: "Change password",
@@ -2701,10 +2742,45 @@ function applyBranding() {
 }
 
 /**
- * Pings Appwrite when the app opens to verify the setup, and reports the
- * result in the sidebar. Runs after the first render so a slow or unreachable
- * cloud never holds up the app.
+ * Says where the data is kept, in the sidebar.
+ *
+ * This used to ping Appwrite, which the project no longer stores anything in -
+ * the data lives in the cloud database. That project has since been paused for
+ * inactivity, so every shop using this was shown a red warning about a service
+ * the software does not depend on. A warning nobody can act on is worse than
+ * none, so it now reports the thing that is actually true.
  */
+async function showStorage() {
+  const chip = el("cloud-chip");
+  const label = el("cloud-text");
+
+  // The desktop program says where its file is instead; it has no server.
+  if (DESKTOP) {
+    const place = await window.usmanTraders.where();
+    chip.className = "cloud-chip ok";
+    label.textContent = "Saved on this computer";
+    chip.title = place.data;
+    chip.onclick = () => window.usmanTraders.reveal(place.data);
+    return;
+  }
+
+  try {
+    const health = await api("/health");
+    const cloud = health.storage === "postgres";
+    chip.className = "cloud-chip ok";
+    label.textContent = cloud ? "Saved in the cloud" : "Saved on the server";
+    chip.title = cloud
+      ? "Your data is in the cloud database, shared by everyone who signs in."
+      : "Your data is in a file on the computer running this site.";
+    chip.onclick = () => toast(chip.title);
+  } catch (err) {
+    chip.className = "cloud-chip bad";
+    label.textContent = "Office not reachable";
+    chip.title = err.message;
+    chip.onclick = () => toast(err.message, "error");
+  }
+}
+
 // ------------------------------------------------------- sharing with the cloud
 //
 // Only the desktop program does this. It keeps its own books and works with no
@@ -2786,66 +2862,6 @@ async function runSync(quiet) {
   }
 }
 
-async function pingAppwrite() {
-  const chip = el("cloud-chip");
-  const label = el("cloud-text");
-
-  // The desktop program has no cloud to reach. Reporting a failed cloud check
-  // would be alarming and untrue, so it says where the data actually is.
-  if (DESKTOP) {
-    const place = await window.usmanTraders.where();
-    chip.className = "cloud-chip ok";
-    label.textContent = "Saved on this computer";
-    chip.title = place.data;
-    chip.onclick = () => window.usmanTraders.reveal(place.data);
-    return;
-  }
-
-  try {
-    const info = await api("/appwrite/ping");
-    state.appwrite = info;
-    if (!info.ok) {
-      chip.className = "cloud-chip bad";
-      label.textContent = "Cloud unreachable";
-    } else if (!info.has_key) {
-      chip.className = "cloud-chip warn";
-      label.textContent = "Cloud: needs API key";
-    } else {
-      chip.className = "cloud-chip ok";
-      label.textContent = `Cloud: ${info.schema}`;
-    }
-    chip.onclick = () => appwriteModal(info);
-  } catch (err) {
-    chip.className = "cloud-chip bad";
-    label.textContent = "Cloud check failed";
-    chip.onclick = () => toast(err.message, "error");
-  }
-}
-
-function appwriteModal(info) {
-  const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:16px;
-    padding:7px 0;border-bottom:1px solid var(--line-2)">
-    <span class="muted">${h(k)}</span><span class="strong mono">${h(v)}</span></div>`;
-  modal({
-    title: "Appwrite connection",
-    body: `
-      ${info.ok
-        ? `<p style="margin-top:0">Connected &mdash; the server replied
-             <strong>${h(info.reply || "Pong!")}</strong>.</p>`
-        : `<div class="form-error">${h(info.error || "Could not reach Appwrite.")}</div>`}
-      ${row("Endpoint", info.endpoint)}
-      ${row("Project", info.project_name || info.project)}
-      ${row("Project ID", info.project)}
-      ${row("Database", info.database)}
-      ${row("API key", info.has_key ? "configured" : "not set")}
-      ${row("Schema", info.schema || "-")}
-      ${info.has_key ? "" : `<p class="muted" style="margin:14px 0 0;font-size:12.5px">
-        Reads and writes need a server API key. Create one in the Appwrite console
-        under <strong>Settings &rarr; API keys</strong>, then start the app with
-        <span class="mono">APPWRITE_KEY=...</span> set.</p>`}`,
-  });
-}
-
 function showLogin(offline) {
   state.user = null;
   el("app").classList.add("hidden");
@@ -2871,7 +2887,7 @@ function setOfflineNotice(offline) {
   });
 }
 
-async function showApp(user) {
+async function showApp(user, mustChangePassword) {
   state.user = user;
   state.company = await api("/company");
   applyBranding();
@@ -2886,8 +2902,10 @@ async function showApp(user) {
   showConnectionBanner();
   if (!location.hash) location.hash = "#/dashboard";
   router();
-  pingAppwrite();
+  showStorage();
   refreshSyncChip();
+  // Do this last, so it sits over a screen that has already drawn.
+  if (mustChangePassword) forcePasswordChange();
 }
 
 el("login-form").addEventListener("submit", async (e) => {
@@ -2900,7 +2918,7 @@ el("login-form").addEventListener("submit", async (e) => {
     const result = await api("/login", { method: "POST", body: formValues(e.target) });
     e.target.reset();
     state.products = [];
-    await showApp(result.user);
+    await showApp(result.user, result.must_change_password);
   } catch (err) {
     errorBox.textContent = err.message;
     errorBox.classList.remove("hidden");
@@ -2981,7 +2999,7 @@ if (!DESKTOP && "serviceWorker" in navigator) {
 (async function boot() {
   try {
     const me = await api("/me");
-    await showApp(me.user);
+    await showApp(me.user, me.must_change_password);
   } catch (err) {
     let offline = err.offline === true;
     try {

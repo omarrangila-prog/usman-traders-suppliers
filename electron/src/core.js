@@ -14,6 +14,11 @@ export class AppError extends Error {
   }
 }
 
+// Every copy of this program ships knowing the same first password. Left alone
+// on a shop counter it is not a password at all, so the program insists on a
+// real one before it will show the books.
+const DEFAULT_PASSWORD = "admin123";
+
 const ROUTES = [];
 
 /** Register a handler. Groups in the pattern arrive as extra arguments. */
@@ -85,7 +90,10 @@ route("POST", "/api/login", (ctx) => {
     throw new AppError(401, "Invalid username or password.");
   }
   ctx.signIn(user);
-  return { user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role } };
+  return {
+    user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role },
+    must_change_password: verifyPassword(DEFAULT_PASSWORD, user.password_hash, user.salt),
+  };
 });
 
 route("POST", "/api/logout", (ctx) => {
@@ -96,7 +104,10 @@ route("POST", "/api/logout", (ctx) => {
 route("GET", "/api/me", (ctx) => {
   ctx.requireUser();
   const u = ctx.user;
-  return { user: { id: u.id, username: u.username, full_name: u.full_name, role: u.role } };
+  return {
+    user: { id: u.id, username: u.username, full_name: u.full_name, role: u.role },
+    must_change_password: verifyPassword(DEFAULT_PASSWORD, u.password_hash, u.salt),
+  };
 });
 
 route("POST", "/api/me/password", (ctx) => {

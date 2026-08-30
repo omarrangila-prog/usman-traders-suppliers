@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import appwrite_client
 import db
 import sync
 import xlsx
@@ -103,7 +102,12 @@ def login(ctx):
 
     ctx.set_cookie = db.make_token(ctx.conn, user["id"])
     return {"user": {"id": user["id"], "username": user["username"],
-                     "full_name": user["full_name"], "role": user["role"]}}
+                     "full_name": user["full_name"], "role": user["role"]},
+            # Every copy of this program ships knowing the same first password.
+            # Left alone on a shop counter it is not a password at all, so the
+            # app insists on a real one before it will show the books.
+            "must_change_password": db.verify_password(
+                DEFAULT_PASSWORD, user["password_hash"], user["salt"])}
 
 
 @route("POST", r"/api/logout")
@@ -116,7 +120,9 @@ def logout(ctx):
 def me(ctx):
     ctx.require_user()
     return {"user": {"id": ctx.user["id"], "username": ctx.user["username"],
-                     "full_name": ctx.user["full_name"], "role": ctx.user["role"]}}
+                     "full_name": ctx.user["full_name"], "role": ctx.user["role"]},
+            "must_change_password": db.verify_password(
+                DEFAULT_PASSWORD, ctx.user["password_hash"], ctx.user["salt"])}
 
 
 @route("POST", r"/api/me/password")
@@ -197,6 +203,8 @@ def delete_user(ctx, user_id):
 # --------------------------------------------------------------------------
 # Company profile
 # --------------------------------------------------------------------------
+
+DEFAULT_PASSWORD = "admin123"
 
 COMPANY_FIELDS = ["name", "tagline", "logo", "address", "city", "phone",
                   "email", "website", "tax_id", "currency", "footer"]
@@ -2106,13 +2114,6 @@ def clear_data(ctx):
     if scope == "everything":
         db.seed(ctx.conn)          # put the item master back so the app stays usable
     return {"ok": True, "scope": scope, "removed": removed}
-
-
-@route("GET", r"/api/appwrite/ping")
-def appwrite_ping(ctx):
-    """Called automatically when the app opens, to verify the Appwrite setup."""
-    ctx.require_user()
-    return appwrite_client.client.status()
 
 
 # --------------------------------------------------------------------------
