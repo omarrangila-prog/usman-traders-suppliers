@@ -16,8 +16,12 @@ The content of every row is hashed and compared against what was agreed at the
 last sync, so any difference is found however it was made - including by a code
 path written later that knows nothing about sharing.
 
-*Losing nothing.* When both sides changed the same record, the newer wins, and
-the older is written to sync_conflicts rather than discarded.
+*Losing nothing.* When both sides changed the same record, one version is kept
+and the other is written to sync_conflicts rather than discarded. Where one
+change was shared before the other was made, the later one wins. Where both were
+made between the same two syncs, nothing recorded when either happened, so which
+one wins is not meaningful - what matters, and what is guaranteed, is that both
+machines end up agreeing and the other version can still be read.
 
 A document and its lines travel as one piece, so line numbering stays a purely
 local matter.
@@ -218,11 +222,13 @@ def local_changes(conn, current, agreed):
         for uid, record in rows.items():
             if known.get(uid) == record["hash"]:
                 continue
-            # Noticed now; the stamp is what decides a tie if the other side
-            # changed the same record.
-            if not record["updated_at"]:
-                record["updated_at"] = stamp
-                conn.execute(f"UPDATE {entity} SET updated_at = ? WHERE uid = ?", (stamp, uid))
+            # The row differs from what was last agreed, so it changed since
+            # then and the stamp has to move with it. Setting it only once - as
+            # this did - meant the stamp recorded when a row was first shared,
+            # not when it last changed, and "the newer one wins" quietly became
+            # "whoever shared it first wins".
+            record["updated_at"] = stamp
+            conn.execute(f"UPDATE {entity} SET updated_at = ? WHERE uid = ?", (stamp, uid))
             changes.append({"entity": entity, "uid": uid, "body": record["body"],
                             "hash": record["hash"], "updated_at": record["updated_at"]})
     conn.commit()
@@ -307,8 +313,14 @@ def write_aggregate(conn, entity, uid, body, updated_at):
 
 
 def remove_aggregate(conn, entity, uid, when):
+    """Remove a row the other side deleted. Returns a note if it was kept."""
     row = conn.execute(f"SELECT id FROM {entity} WHERE uid = ?", (uid,)).fetchone()
     if row:
+        holding = still_in_use(conn, entity, row["id"])
+        if holding:
+            # Deleting it would take work with it that the other machine has
+            # never seen. Keep it, and say so.
+            return {"entity": entity, "uid": uid, "kept_because": ", ".join(holding)}
         if entity in CHILDREN:
             table, parent, _ = CHILDREN[entity]
             conn.execute(f"DELETE FROM {table} WHERE {parent} = ?", (row["id"],))
@@ -317,6 +329,7 @@ def remove_aggregate(conn, entity, uid, when):
         "INSERT INTO tombstones (entity, uid, deleted_at) VALUES (?,?,?) "
         "ON CONFLICT (entity, uid) DO UPDATE SET deleted_at = excluded.deleted_at",
         (entity, uid, when))
+    return None
 
 
 # Records are applied parents-first so a reference always finds its target.
@@ -324,9 +337,40 @@ ORDER = ["company", "accounts", "customers", "suppliers", "products", "fixed_ass
          "orders", "invoices", "purchases", "journal_entries", "field_entries",
          "stock_moves"]
 
+# What points at a row, and would be orphaned if it went. A delete travels only
+# when the other machine has nothing left depending on it: the office removing a
+# customer must not take away an order the web site raised for them in the
+# meantime. The row is kept and the disagreement recorded instead.
+DEPENDENTS = {
+    "customers": [("orders", "customer_id"), ("invoices", "customer_id")],
+    "suppliers": [("purchases", "supplier_id"), ("products", "supplier_id")],
+    "products": [("order_items", "product_id"), ("invoice_items", "product_id"),
+                 ("purchase_items", "product_id"), ("stock_moves", "product_id")],
+    "accounts": [("journal_lines", "account_id")],
+    "orders": [("invoices", "order_id")],
+}
+
+
+def still_in_use(conn, entity, row_id):
+    """What still points at this row, if anything."""
+    holding = []
+    for table, column in DEPENDENTS.get(entity, []):
+        count = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE {column} = ?", (row_id,)).fetchone()["c"]
+        if count:
+            holding.append(f"{count} in {table}")
+    return holding
+
 
 def apply_incoming(conn, changes, graves, current, agreed):
     """Merge what the other side sent. Returns the conflicts that were logged."""
+    # A laptop whose date is wrong would otherwise look newer than everything
+    # for ever and win every disagreement from now on, quietly overriding work
+    # done elsewhere. No machine gets to claim a change from the future.
+    ceiling = now()
+    for change in changes:
+        if (change.get("updated_at") or "") > ceiling:
+            change["updated_at"] = ceiling
     conflicts = []
     by_entity = {}
     for change in changes:
@@ -370,7 +414,10 @@ def apply_incoming(conn, changes, graves, current, agreed):
         write_aggregate(conn, entity, change["uid"], change["body"],
                         change.get("updated_at") or now())
 
-    for grave in graves:
+    # Children first: removing a customer before the orders that point at them
+    # would be refused by the database and abandon the whole exchange.
+    depth = {name: index for index, name in enumerate(ORDER)}
+    for grave in sorted(graves, key=lambda g: -depth.get(g["entity"], 0)):
         # A row changed here after the other side deleted it is kept, not lost.
         entity, uid = grave["entity"], grave["uid"]
         mine = current.get(entity, {}).get(uid)
@@ -381,7 +428,16 @@ def apply_incoming(conn, changes, graves, current, agreed):
                 (entity, uid, now(), canonical(mine["body"]), canonical({"deleted": True})))
             conflicts.append({"entity": entity, "uid": uid, "kept": "local"})
             continue
-        remove_aggregate(conn, entity, uid, grave["deleted_at"])
+        kept = remove_aggregate(conn, entity, uid, grave["deleted_at"])
+        if kept:
+            conn.execute(
+                """INSERT INTO sync_conflicts (entity, uid, noticed_at, kept, discarded)
+                   VALUES (?,?,?,?,?)""",
+                (entity, uid, now(),
+                 canonical({"kept": "it is still being used here",
+                            "used_by": kept["kept_because"]}),
+                 canonical({"asked_for": "delete"})))
+            conflicts.append({"entity": entity, "uid": uid, "kept": "local"})
 
     conn.commit()
     return conflicts

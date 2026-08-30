@@ -2556,8 +2556,9 @@ async function viewCompany() {
         wide: true,
         body: rows.length ? `
           <p class="muted" style="margin-top:0">When the same record was changed here and on
-            the web site, the newer one was kept. The other is listed below rather than thrown
-            away, so nothing is lost without you seeing it.</p>
+            the web site, one version was kept and the other is listed below rather than thrown
+            away, so nothing is lost without you seeing it. If one change was shared before the
+            other was made, the later one was kept.</p>
           <div class="table-wrap"><table class="table"><thead><tr>
             <th>When</th><th>What</th><th>Kept</th><th>Not used</th></tr></thead><tbody>
             ${rows.map((c) => `<tr>

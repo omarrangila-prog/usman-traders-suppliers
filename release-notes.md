@@ -1,50 +1,59 @@
-Your bookers' orders now come through to the desktop — today, without waiting
-for anything to be fixed on the web site.
+Four faults found and fixed. None of them had been hit yet — they were found by
+going looking for the same *kind* of mistake as the numbering bug in v2.1.1:
+things that are true on one machine and stop being true once records arrive from
+another.
 
-## The short version
+## What was wrong
 
-Press **Share now** in the desktop program and every booking your men have taken
-on their phones appears in **Field Entries**, ready to turn into a real order
-with one click. Doing it twice never gives you the same booking twice.
+**Deleting something the other machine was still using stopped everything.**
+Remove a customer at the office while the web site has an order for them, and
+the whole exchange was abandoned with a database error — no bookings in, no work
+out, every time, until someone worked out which record was to blame. Deletions
+are now applied in the right order, and a record another machine is still using
+is kept rather than deleted, with the disagreement recorded so you can see it.
 
-Tested against your live site: **all 8 bookings** came through with their shop
-names, phone numbers and item lines intact.
+**"The newer change wins" was not true.** The mark saying when a record last
+changed was written once and never moved, so it recorded when a record was first
+shared, not when it was last edited. In practice the rule was "whoever shared it
+first wins" — the opposite of what was intended, and of what I told you.
 
-## Why this release exists
+**A computer with the wrong date won every argument for ever.** A laptop whose
+clock is set years ahead looks newer than everything, so every later change made
+anywhere else would have been silently overridden. Dates from the future are now
+pulled back to real time, and every machine measures against the web site's clock
+rather than its own.
 
-Full two-way sharing shipped in v2.1.0, but it needs the web site to be running
-a matching version — and **your web site has not updated since 16 August**. Every
-deployment since has failed on Vercel with *Not authorized*, no build log, and
-no error shown. That is an account problem, not a fault in the software, and it
-is not something the program can fix.
+**Clearing the stock history could leave stock figures behind.** Stock is now
+always recalculated from the movements behind it, on every machine.
 
-Rather than leave the office blind to its own bookings until that is sorted, the
-desktop now reads them straight out of the part of the web site that has always
-worked. It sends nothing and changes nothing there — it only brings the bookings
-in. When the web site is finally updated, full two-way sharing switches on by
-itself with no change here.
+## What is honestly guaranteed about conflicts
 
-## A real bug this found
+If a change is shared before someone else edits the same thing, the later edit
+wins — that is the ordinary case and it is now correct.
 
-Creating an order after a sync could fail with a duplicate-number error. The
-program took the next document number from the most recent row, but records
-arriving from the web site are written in whatever order the merge reaches them,
-so the newest row is not the highest number. It now takes the highest number
-actually in use. Nobody had hit it yet; the test did.
+If two people edit the same record between the same two syncs, nothing recorded
+which came first, so which one wins is not meaningful. What is guaranteed is
+that **every machine ends up agreeing**, the answer is one of the two real
+values and never a mixture, and **the version that lost is written down** where
+you can read it — Settings → Records changed in both places.
+
+I previously described this as "the newer one wins" without qualification. That
+was wrong, and it is now stated accurately in the program itself.
 
 ## What is checked before a release is published
 
-- **25 figures** worked out by hand and compared against what the program reports
-- **79 operations** — buying, delivering, invoicing, collecting, deleting,
-  year-end close, roles and passwords
-- **A day in the shop** — buy from a vendor, take an order, deliver, invoice,
-  take part payment, check the figures, and open all 24 screens
+- **25 figures** worked out by hand
+- **79 operations** — buying, delivering, invoicing, collecting, year-end close
+- **A day in the shop** — a full day's work, and all 24 screens opened
 - **52 sharing checks** — the real web server and the real desktop program made
-  to talk over HTTP, covering no duplication, work flowing both ways, bookings
-  arriving, deletions staying deleted, clashes being kept rather than lost, and
-  both sides ending with identical document numbers
-- The installer is then installed on a clean Windows machine, and the installed
-  program must open a window, sign in, draw the dashboard and read back the item
-  master — **16 self-checks**
+  to talk over HTTP
+- **26 awkward situations** — deleting what another machine is using, a third
+  computer joining a business already running, three machines working at once,
+  and a machine whose clock says 2099
+- The installer is installed on a clean Windows machine and must open a window,
+  sign in, draw the dashboard and read back the item master — **16 self-checks**
 
-A build that fails any of it is not published.
+Your bookers' orders still come through to the desktop with **Share now**, and
+the web site still has not updated since 16 August — Vercel refuses every
+deployment with *Not authorized*. That remains an account problem, not a fault
+in the software.

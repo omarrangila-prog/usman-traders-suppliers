@@ -49,6 +49,12 @@ jobs:
         working-directory: electron
         run: node test/sharing.js
 
+      # Deleting on one machine what another is still using, a third computer
+      # joining, three at once, and a machine whose clock is wrong.
+      - name: Awkward situations must not break it
+        working-directory: electron
+        run: node test/hostile.js
+
       - name: Build the installer and the portable program
         working-directory: electron
         run: npx electron-builder --win --publish never

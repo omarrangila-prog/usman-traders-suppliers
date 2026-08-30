@@ -51,6 +51,29 @@ const UNIQUE_COLUMNS = {
 const ORDER = ["company", "accounts", "customers", "suppliers", "products", "fixed_assets",
   "orders", "invoices", "purchases", "journal_entries", "field_entries", "stock_moves"];
 
+// What points at a row, and would be orphaned if it went. A delete travels only
+// when this machine has nothing left depending on it: the office removing a
+// customer must not take away an order the web site raised for them in the
+// meantime. The row is kept and the disagreement recorded instead.
+const DEPENDENTS = {
+  customers: [["orders", "customer_id"], ["invoices", "customer_id"]],
+  suppliers: [["purchases", "supplier_id"], ["products", "supplier_id"]],
+  products: [["order_items", "product_id"], ["invoice_items", "product_id"],
+    ["purchase_items", "product_id"], ["stock_moves", "product_id"]],
+  accounts: [["journal_lines", "account_id"]],
+  orders: [["invoices", "order_id"]],
+};
+
+/** What still points at this row, if anything. */
+function stillInUse(db, entity, rowId) {
+  const holding = [];
+  for (const [table, column] of DEPENDENTS[entity] || []) {
+    const count = db.scalar(`SELECT COUNT(*) FROM ${table} WHERE ${column} = ?`, [rowId]);
+    if (count) holding.push(`${count} in ${table}`);
+  }
+  return holding;
+}
+
 export function now() {
   return new Date().toISOString().replace(/\.\d+Z$/, "");
 }
@@ -172,10 +195,13 @@ export function localChanges(db, current, agreed) {
     const known = agreed[entity] || {};
     for (const [uid, record] of Object.entries(rows)) {
       if (known[uid] === record.hash) continue;
-      if (!record.updated_at) {
-        record.updated_at = stamp;
-        db.run(`UPDATE ${entity} SET updated_at = ? WHERE uid = ?`, [stamp, uid]);
-      }
+      // The row differs from what was last agreed, so it changed since then and
+      // the stamp has to move with it. Setting it only once - as this did -
+      // meant the stamp recorded when a row was first shared, not when it last
+      // changed, and "the newer one wins" quietly became "whoever shared it
+      // first wins".
+      record.updated_at = stamp;
+      db.run(`UPDATE ${entity} SET updated_at = ? WHERE uid = ?`, [stamp, uid]);
       changes.push({ entity, uid, body: record.body, hash: record.hash,
         updated_at: record.updated_at });
     }
@@ -293,9 +319,15 @@ function writeAggregate(db, entity, uid, body, updatedAt) {
   return rowId;
 }
 
+/** Remove a row the cloud deleted. Returns a note if it had to be kept. */
 function removeAggregate(db, entity, uid, when) {
   const row = db.get(`SELECT id FROM ${entity} WHERE uid = ?`, [uid]);
   if (row) {
+    const holding = stillInUse(db, entity, row.id);
+    if (holding.length) {
+      // Deleting it would take work with it that the cloud has never seen.
+      return { entity, uid, kept_because: holding.join(", ") };
+    }
     if (CHILDREN[entity]) {
       const [table, parent] = CHILDREN[entity];
       db.run(`DELETE FROM ${table} WHERE ${parent} = ?`, [row.id]);
@@ -305,11 +337,17 @@ function removeAggregate(db, entity, uid, when) {
   db.run("INSERT INTO tombstones (entity, uid, deleted_at) VALUES (?,?,?) " +
     "ON CONFLICT (entity, uid) DO UPDATE SET deleted_at = excluded.deleted_at",
     [entity, uid, when]);
+  return null;
 }
 
 /** Merge what the cloud sent. Returns the conflicts that were logged. */
 export function applyIncoming(db, changes, graves, current, agreed) {
   const conflicts = [];
+  // No machine gets to claim a change from the future.
+  const ceiling = now();
+  for (const change of changes) {
+    if ((change.updated_at || "") > ceiling) change.updated_at = ceiling;
+  }
   const byEntity = {};
   for (const change of changes) (byEntity[change.entity] ||= []).push(change);
 
@@ -322,7 +360,8 @@ export function applyIncoming(db, changes, graves, current, agreed) {
       if (mine && mine.hash === change.hash) continue;   // already the same
 
       if (mine && (agreed[entity] || {})[uid] !== mine.hash) {
-        // Both sides changed it. The newer wins; the other is kept, not lost.
+        // Both sides changed it. One is kept and the other written down, never
+        // discarded. See the note at the top on which one that is.
         const theirsNewer = (change.updated_at || "") >= (mine.updated_at || "");
         db.run(`INSERT INTO sync_conflicts (entity, uid, noticed_at, kept, discarded)
                 VALUES (?,?,?,?,?)`,
@@ -351,7 +390,11 @@ export function applyIncoming(db, changes, graves, current, agreed) {
     writeAggregate(db, entity, change.uid, change.body, change.updated_at || now());
   }
 
-  for (const grave of graves) {
+  // Children first: removing a customer before the orders that point at them
+  // would be refused by the database and abandon the whole exchange.
+  const depth = Object.fromEntries(ORDER.map((name, index) => [name, index]));
+  const ordered = [...graves].sort((a, b) => (depth[b.entity] || 0) - (depth[a.entity] || 0));
+  for (const grave of ordered) {
     const { entity, uid } = grave;
     const mine = (current[entity] || {})[uid];
     if (mine && (agreed[entity] || {})[uid] !== mine.hash) {
@@ -362,7 +405,15 @@ export function applyIncoming(db, changes, graves, current, agreed) {
       conflicts.push({ entity, uid, kept: "local" });
       continue;
     }
-    removeAggregate(db, entity, uid, grave.deleted_at);
+    const kept = removeAggregate(db, entity, uid, grave.deleted_at);
+    if (kept) {
+      db.run(`INSERT INTO sync_conflicts (entity, uid, noticed_at, kept, discarded)
+              VALUES (?,?,?,?,?)`,
+        [entity, uid, now(),
+          canonical({ kept: "it is still being used here", used_by: kept.kept_because }),
+          canonical({ asked_for: "delete" })]);
+      conflicts.push({ entity, uid, kept: "local" });
+    }
   }
   return conflicts;
 }
@@ -469,6 +520,16 @@ export async function exchange(db, account) {
   let conflicts = [];
   db.raw.exec("BEGIN");
   try {
+    // This computer's clock may be wrong. The cloud is what every machine has
+    // in common, so its time is the one they all measure against - otherwise a
+    // laptop set years ahead would win every disagreement from now on.
+    const cloudTime = reply.payload.at;
+    if (cloudTime) {
+      for (const entity of SYNCED_TABLES) {
+        db.run(`UPDATE ${entity} SET updated_at = ? WHERE updated_at > ?`,
+          [cloudTime, cloudTime]);
+      }
+    }
     conflicts = applyIncoming(db, incoming, incomingGraves, before, agreed);
     recountStock(db);
     recordAgreement(db, snapshot(db));
