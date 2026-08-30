@@ -280,7 +280,7 @@ DATABASE_URL=postgresql://...        # optional; SQLite is used when unset
 | | |
 |---|---|
 | **Code** | https://github.com/omarrangila-prog/usman-traders-suppliers (private) |
-| **Online demo** | https://usman-traders-suppliers.vercel.app |
+| **Online demo** | ask the owner &mdash; the address is not published here |
 
 ### The online version is a demo, not your books
 
