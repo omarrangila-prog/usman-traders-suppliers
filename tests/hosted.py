@@ -22,6 +22,20 @@ def check(label, ok, detail=""):
         fails.append(label)
 
 
+# Somewhere that cannot be created, whichever machine this runs on.
+NOWHERE = "Z:\\nowhere\\readonly" if os.name == "nt" else "/proc/nonexistent-readonly"
+
+
+def nowhere_to_write():
+    """The environment of a host that offers no writable home directory.
+
+    Which variable matters depends on the platform - Windows looks at APPDATA
+    and USERPROFILE, everything else at HOME - so all of them are pointed
+    somewhere unusable and the test means the same thing either way."""
+    return {"HOME": NOWHERE, "USERPROFILE": NOWHERE, "APPDATA": NOWHERE,
+            "HOMEDRIVE": "Z:", "HOMEPATH": "\\nowhere"}
+
+
 def run(code, **overrides):
     env = dict(os.environ)
     env.pop("UT_DB", None)
@@ -29,23 +43,20 @@ def run(code, **overrides):
     return subprocess.run([sys.executable, "-c", code],
                           capture_output=True, text=True, env=env, cwd=HERE)
 
-
-NOWHERE = "/proc/nonexistent-readonly"      # exists as a name, cannot be written
-
 print("\n== a host with no writable home ==")
-r = run("import db; print(db.DB_PATH)", HOME=NOWHERE,
+r = run("import db; print(db.DB_PATH)", **nowhere_to_write(),
         DATABASE_URL="postgresql://u:p@example.invalid/db")
 check("db imports with a database URL and nowhere to write",
       r.returncode == 0, r.stderr.strip()[-200:])
 check("and does not claim a file in a folder it cannot create",
-      "/proc" not in r.stdout, r.stdout.strip())
+      NOWHERE not in r.stdout, r.stdout.strip())
 
-r = run("import db, app; print('ok')", HOME=NOWHERE,
+r = run("import db, app; print('ok')", **nowhere_to_write(),
         DATABASE_URL="postgresql://u:p@example.invalid/db")
 check("the whole application imports", r.returncode == 0, r.stderr.strip()[-200:])
 
-r = run("import sys; sys.path.insert(0, 'api'); import index; print('ok')", HOME=NOWHERE,
-        DATABASE_URL="postgresql://u:p@example.invalid/db")
+r = run("import sys; sys.path.insert(0, 'api'); import index; print('ok')",
+        **nowhere_to_write(), DATABASE_URL="postgresql://u:p@example.invalid/db")
 check("the hosted entry point imports", r.returncode == 0, r.stderr.strip()[-300:])
 
 print("\n== and still works normally on a computer ==")
