@@ -30,6 +30,11 @@ jobs:
         working-directory: electron
         run: npm install --no-audit --no-fund
 
+      # The web half must survive a host with a read-only filesystem and no
+      # home directory. Getting this wrong takes the site down on every request.
+      - name: The web version must survive hosted conditions
+        run: python tests/hosted.py
+
       - name: The figures must match what was worked out on paper
         working-directory: electron
         run: node test/figures.js

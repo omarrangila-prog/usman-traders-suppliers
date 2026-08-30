@@ -48,17 +48,32 @@ def data_dir():
         fallback = os.path.join(base, "UsmanTraders")
     else:
         fallback = os.path.join(os.path.expanduser("~"), ".usmantraders")
-    os.makedirs(fallback, exist_ok=True)
-    return fallback
+    if _writable(fallback):
+        return fallback
+    # A hosted server has no home directory to write to, and nothing here
+    # should ever bring the whole program down looking for one. Somewhere
+    # temporary is enough: when this path is reached the real data is in the
+    # database named by DATABASE_URL, not in a file.
+    import tempfile
+    return tempfile.gettempdir()
 
 
 LOGO_DIR = getattr(__import__("sys"), "_MEIPASS",
                    os.path.dirname(os.path.abspath(__file__)))
 
-DB_PATH = os.environ.get("UT_DB") or (
-    "/tmp/usmantraders.db" if DEMO_MODE
-    else os.path.join(data_dir(), "usmantraders.db")
-)
+def _db_path():
+    """Where the SQLite file goes. With a database URL configured there is no
+    file at all, so do not go looking for a folder to put one in - on a hosted
+    server that search is what fails, and it fails while this module is being
+    imported, which takes the whole site down with it."""
+    if os.environ.get("UT_DB"):
+        return os.environ["UT_DB"]
+    if IS_POSTGRES or DEMO_MODE:
+        return "/tmp/usmantraders.db"
+    return os.path.join(data_dir(), "usmantraders.db")
+
+
+DB_PATH = _db_path()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
