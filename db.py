@@ -417,7 +417,10 @@ PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 SCHEMA_VERSION = "6"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
-_NO_ID_TABLES = {"settings"}
+# Tables with no id column of their own. Postgres inserts have " RETURNING id"
+# appended so the caller can learn the new row's number, which fails outright on
+# a table that has no such column.
+_NO_ID_TABLES = {"settings", "sync_state", "tombstones", "sync_shadow"}
 
 if IS_POSTGRES:
     import psycopg2
