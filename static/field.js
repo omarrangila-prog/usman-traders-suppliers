@@ -12,6 +12,7 @@ const $ = (id) => document.getElementById(id);
 const QUEUE_KEY = "utf_queue";
 const CACHE_KEY = "utf_cache";
 const DEVICE_KEY = "utf_device";
+const BOOKER_KEY = "utf_booker";
 
 let catalogue = { products: [], customers: [], suppliers: [], company: "" };
 let kind = "Booking";
@@ -24,6 +25,28 @@ function uuid() {
     const r = (Math.random() * 16) | 0;
     return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
   });
+}
+
+/** Who is using this phone. Asked once, then remembered on the device. */
+function booker() {
+  return (localStorage.getItem(BOOKER_KEY) || "").trim();
+}
+
+function rememberBooker(name) {
+  localStorage.setItem(BOOKER_KEY, String(name || "").trim());
+}
+
+/** Show the booker's name, and get out of the way once it is known. */
+function paintBooker() {
+  const field = $("booker");
+  if (!field) return;
+  const known = booker();
+  if (known) {
+    field.value = known;
+    const hint = $("booker-hint");
+    if (hint) hint.textContent = `Bookings are recorded against ${known}. Change it here if someone else is using this phone.`;
+  }
+  field.addEventListener("change", () => rememberBooker(field.value));
 }
 
 function device() {
@@ -187,6 +210,14 @@ function renderQueue() {
 }
 
 function save() {
+  const who = $("booker").value.trim();
+  if (!who) {
+    toast("Please put your name in, so the office knows who took this.", "err");
+    $("booker").focus();
+    return;
+  }
+  rememberBooker(who);
+
   const party = partyName();
   if (!party) {
     toast("Choose a shop or type a new name.", "err");
@@ -198,6 +229,7 @@ function save() {
 
   const entry = {
     client_id: uuid(),
+    booker: who,
     kind,
     party_name: party,
     phone: $("phone").value.trim(),
@@ -356,6 +388,7 @@ setInterval(sync, 30000);          // catch connections that return quietly
 $("date").value = new Date().toISOString().slice(0, 10);
 renderParties();
 renderLines();
+paintBooker();
 renderQueue();
 showNetwork();
 loadCatalogue();

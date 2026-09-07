@@ -798,7 +798,7 @@ async function viewFieldEntries() {
       </td>
       <td>${statusBadge(e.kind === "Purchase" ? "Ordered" : "Pending").replace(
              e.kind === "Purchase" ? "Ordered" : "Pending", h(e.kind))}</td>
-      <td>${fmtDate(e.entry_date)}<div class="muted">by ${h(e.device) || "field"}</div></td>
+      <td>${fmtDate(e.entry_date)}<div class="muted">by ${h(e.booker) || "phone " + h(e.device) || "the field"}</div></td>
       <td>${e.items.map((i) => `${h(i.sku)} &times; ${qty(i.qty)}`).join("<br>") || "-"}</td>
       <td class="num strong">${money(e.total)}</td>
       <td>${e.status === "Converted"
@@ -2284,6 +2284,74 @@ async function viewReports() {
         ${reportTable("Purchases by item", `<th>Code</th><th>Item</th><th class="num">Qty bought</th><th class="num">Amount</th>`,
           r.by_product.map((p) => `<tr><td class="mono">${h(p.sku)}</td><td>${h(p.name)}</td>
             <td class="num">${qty(p.qty)} ${h(p.unit)}</td><td class="num strong">${money(p.amount)}</td></tr>`))}`;
+    } else if (tab === "bookers") {
+      const r = await api(`/reports/bookers?from=${from}&to=${to}`);
+      const t = r.total;
+      box.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat green"><div class="label">Invoiced</div><div class="value">${cur(t.invoiced)}</div>
+            <div class="sub">${t.invoices} invoices from ${r.bookers.length} booker(s)</div></div>
+          <div class="stat blue"><div class="label">Collected</div><div class="value">${cur(t.collected)}</div></div>
+          <div class="stat amber"><div class="label">Still owed</div><div class="value">${cur(t.outstanding)}</div></div>
+          <div class="stat"><div class="label">Bookings taken</div><div class="value">${t.bookings}</div>
+            <div class="sub">${t.pending} still waiting to be dealt with</div></div>
+        </div>
+        ${reportTable("What each booker brought in",
+          `<th>Booker</th><th class="num">Bookings</th><th class="num">Waiting</th>
+           <th class="num">Value booked</th><th class="num">Orders</th>
+           <th class="num">Invoiced</th><th class="num">Collected</th><th class="num">Still owed</th>`,
+          r.bookers.map((b) => `<tr>
+            <td class="strong">${h(b.booker)}</td>
+            <td class="num">${b.bookings}</td>
+            <td class="num">${b.pending ? `<span class="badge amber">${b.pending}</span>` : "-"}</td>
+            <td class="num">${money(b.booked_value)}</td>
+            <td class="num">${b.orders}</td>
+            <td class="num strong">${money(b.invoiced)}</td>
+            <td class="num">${money(b.collected)}</td>
+            <td class="num">${money(b.outstanding)}</td></tr>`))}
+        <p class="muted" style="margin:0 2px">Bookings are counted by the date they were
+          taken, and orders and invoices by their own dates. A booking still waiting has
+          been done by the booker but not yet turned into an order in the office.</p>`;
+    } else if (tab === "costing") {
+      const r = await api(`/reports/costing?from=${from}&to=${to}`);
+      const t = r.summary;
+      const warn = (n, label, list) => n ? `
+        ${reportTable(label, `<th>Code</th><th>Item</th><th class="num">Cost</th>
+          <th class="num">Sale price</th><th class="num">Per unit</th>`,
+          list.map((i) => `<tr><td class="mono">${h(i.sku)}</td><td>${h(i.name)}</td>
+            <td class="num">${money(i.cost)}</td><td class="num">${money(i.price)}</td>
+            <td class="num ${i.unit_margin < 0 ? "bad" : ""}">${money(i.unit_margin)}</td></tr>`))}` : "";
+      box.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat green"><div class="label">Sold</div><div class="value">${cur(t.revenue)}</div>
+            <div class="sub">${t.items_sold} item(s) moved</div></div>
+          <div class="stat blue"><div class="label">What it cost us</div><div class="value">${cur(t.cost_of_sales)}</div></div>
+          <div class="stat amber"><div class="label">Profit</div><div class="value">${cur(t.profit)}</div>
+            <div class="sub">${money(t.margin)}% margin</div></div>
+          <div class="stat"><div class="label">Needs attention</div>
+            <div class="value">${t.sold_below_cost + t.no_cost_recorded}</div>
+            <div class="sub">${t.sold_below_cost} priced below cost, ${t.no_cost_recorded} with no cost</div></div>
+        </div>
+        ${reportTable("Item by item",
+          `<th>Code</th><th>Item</th><th class="num">Cost</th><th class="num">Sale price</th>
+           <th class="num">Per unit</th><th class="num">Sold</th><th class="num">Revenue</th>
+           <th class="num">Profit</th><th class="num">Margin</th>`,
+          r.items.map((i) => `<tr>
+            <td class="mono">${h(i.sku)}</td><td>${h(i.name)}</td>
+            <td class="num">${money(i.cost)}</td>
+            <td class="num">${money(i.price)}</td>
+            <td class="num ${i.unit_margin < 0 ? "bad" : ""}">${money(i.unit_margin)}</td>
+            <td class="num">${i.qty_sold ? qty(i.qty_sold) + " " + h(i.unit) : "-"}</td>
+            <td class="num">${i.revenue ? money(i.revenue) : "-"}</td>
+            <td class="num strong ${i.profit < 0 ? "bad" : ""}">${i.qty_sold ? money(i.profit) : "-"}</td>
+            <td class="num">${i.qty_sold ? money(i.margin) + "%" : money(i.unit_margin_pct) + "%"}</td>
+            </tr>`))}
+        ${warn(t.sold_below_cost, "Priced below what they cost", r.sold_below_cost)}
+        ${warn(t.no_cost_recorded, "No cost price recorded yet", r.no_cost_recorded)}
+        <p class="muted" style="margin:0 2px">Cost is the price last paid for the item, which
+          is what the books value stock at &mdash; so the profit here is the same profit the
+          accounts report. Items with no cost recorded will look like pure profit until a
+          purchase sets one.</p>`;
     } else {
       const r = await api("/reports/inventory");
       box.innerHTML = `
@@ -2324,6 +2392,8 @@ async function viewReports() {
         <option value="sales">Sales report</option>
         <option value="purchases">Purchase report</option>
         <option value="inventory">Inventory report</option>
+        <option value="bookers">Booker report</option>
+        <option value="costing">Costing &amp; profit</option>
       </select>
       <label class="field" id="date-from">From <input type="date" id="r-from" value="${from}"></label>
       <label class="field" id="date-to">To <input type="date" id="r-to" value="${to}"></label>

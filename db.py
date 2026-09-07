@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_status TEXT NOT NULL DEFAULT 'Not Dispatched',
     tracking_note   TEXT NOT NULL DEFAULT '',
     notes           TEXT NOT NULL DEFAULT '',
+    booker          TEXT NOT NULL DEFAULT '',
     subtotal        REAL NOT NULL DEFAULT 0,
     discount        REAL NOT NULL DEFAULT 0,
     tax             REAL NOT NULL DEFAULT 0,
@@ -196,6 +197,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     paid         REAL NOT NULL DEFAULT 0,
     status       TEXT NOT NULL DEFAULT 'Unpaid',
     notes        TEXT NOT NULL DEFAULT '',
+    booker       TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -241,6 +243,9 @@ CREATE TABLE IF NOT EXISTS purchase_items (
 CREATE TABLE IF NOT EXISTS field_entries (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id   TEXT NOT NULL UNIQUE,
+    -- who took it. The device id says which phone, which is no use for asking
+    -- someone about an order or for paying commission on it.
+    booker      TEXT NOT NULL DEFAULT '',
     kind        TEXT NOT NULL DEFAULT 'Booking',
     party_name  TEXT NOT NULL DEFAULT '',
     phone       TEXT NOT NULL DEFAULT '',
@@ -414,7 +419,7 @@ PG_SCHEMA = os.environ.get("UT_PG_SCHEMA", "usmantraders")
 # to notice that its database predates the current code. Checking for one known
 # table is not enough - that table exists happily while newer ones are missing -
 # and neither is checking tables alone, since new chart accounts are data.
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 
 _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 # Tables with no id column of their own. Postgres inserts have " RETURNING id"
@@ -913,7 +918,10 @@ def add_missing_columns(conn):
     """CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a column
     added in a later version has to be applied to databases already in use."""
     wanted = {"customers": [("code", "TEXT NOT NULL DEFAULT ''")],
-              "suppliers": [("code", "TEXT NOT NULL DEFAULT ''")]}
+              "suppliers": [("code", "TEXT NOT NULL DEFAULT ''")],
+              "field_entries": [("booker", "TEXT NOT NULL DEFAULT ''")],
+              "orders": [("booker", "TEXT NOT NULL DEFAULT ''")],
+              "invoices": [("booker", "TEXT NOT NULL DEFAULT ''")]}
     for table in SYNCED_TABLES:
         wanted.setdefault(table, []).extend(
             [("uid", "TEXT NOT NULL DEFAULT ''"),

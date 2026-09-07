@@ -10,6 +10,15 @@
 import { freshApp, reporter } from "./harness.js";
 const app = freshApp(); const r = reporter("A DAY IN THE SHOP"); const call = app.call;
 
+// The dashboard reports "this month", so the day has to be today's month or the
+// figures fall outside it and the test starts failing on the first of a month
+// for no reason at all.
+const now = new Date();
+const pad = (n) => String(n).padStart(2, "0");
+const TODAY = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+const MONTH_FROM = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+const MONTH_TO = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-28`;
+
 r.section("he opens the program");
 r.check("his 64 items are there", call("GET", "/api/products").length === 64);
 r.check("his 5 vendors are there", call("GET", "/api/suppliers").length === 5);
@@ -18,7 +27,7 @@ r.check("the dashboard opens", "stock_value" in call("GET", "/api/dashboard"));
 r.section("he buys stock from REHAN AND BROTHERS");
 const rehan = call("GET", "/api/suppliers").find(s => s.name === "REHAN AND BROTHERS");
 const achar = call("GET", "/api/products").find(p => p.sku === "00001");
-const pur = call("POST", "/api/purchases", { supplier_id: rehan.id, purchase_date: "2026-08-22",
+const pur = call("POST", "/api/purchases", { supplier_id: rehan.id, purchase_date: TODAY,
   bill_no: "B-2211", tax: 0, items: [{ product_id: achar.id, qty: 500, price: 7 }], paid: 2000 });
 r.check("the purchase is saved", Boolean(pur.purchase_no), pur.purchase_no);
 r.check("stock went up to 500",
@@ -29,7 +38,7 @@ r.check("he still owes 1500",
 r.section("a shop orders from him");
 const shop = call("POST", "/api/customers", { name: "Al-Madina Store", city: "Karachi",
   phone: "0321-9876543" });
-const ord = call("POST", "/api/orders", { customer_id: shop.id, order_date: "2026-08-22",
+const ord = call("POST", "/api/orders", { customer_id: shop.id, order_date: TODAY,
   tax: 0, items: [{ product_id: achar.id, qty: 100, price: 10 }] });
 r.check("the order is saved", Boolean(ord.order_no), ord.order_no);
 r.check("stock has not moved yet",
@@ -39,7 +48,7 @@ r.section("he delivers it");
 call("POST", `/api/orders/${ord.id}/status`, { delivery_status: "Delivered" });
 r.check("stock came down to 400",
   call("GET", "/api/products").find(p => p.sku === "00001").stock === 400);
-const inv = call("POST", `/api/orders/${ord.id}/invoice`, { invoice_date: "2026-08-22" });
+const inv = call("POST", `/api/orders/${ord.id}/invoice`, { invoice_date: TODAY });
 r.check("the invoice is made", Boolean(inv.invoice_no), inv.invoice_no);
 const full = call("GET", `/api/invoices/${inv.id}`);
 r.check("the invoice is for 1000", full.invoice.total === 1000, full.invoice.total);
@@ -59,7 +68,7 @@ r.check("purchases this month shows 3500", d.purchases_month === 3500, d.purchas
 r.check("money owed to him shows 500", d.receivables === 500, d.receivables);
 r.check("money he owes shows 1500", d.payables === 1500, d.payables);
 r.check("stock value shows 400 x 7 = 2800", d.stock_value === 2800, d.stock_value);
-const pl = call("GET", "/api/reports/profit-loss", null, { from: "2026-08-01", to: "2026-08-31" });
+const pl = call("GET", "/api/reports/profit-loss", null, { from: MONTH_FROM, to: MONTH_TO });
 r.check("profit = 1000 sales less 700 cost = 300", pl.net_profit === 300, pl.net_profit);
 const bs = call("GET", "/api/reports/balance-sheet");
 r.check("the balance sheet balances", bs.balances);

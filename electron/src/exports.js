@@ -134,11 +134,75 @@ function productsBook(ctx) {
   return { filename: stamped(`${business} Item Master`), data: write([sheet]) };
 }
 
+function bookersBook(ctx, query) {
+  const report = dispatch(ctx, "GET", "/api/reports/bookers", null, query);
+  const period = `${report.from} to ${report.to}`;
+  const business = businessName(ctx.db);
+  const t = report.total;
+
+  const sheet = new Sheet("By Booker", `${business} - Booker Report`, period);
+  sheet.columns = [new Column("Booker", 26), new Column("Bookings", 12, "number"),
+    new Column("Waiting", 11, "number"), new Column("Converted", 12, "number"),
+    new Column("Value Booked", 16, "money"), new Column("Orders", 11, "number"),
+    new Column("Order Value", 16, "money"), new Column("Invoices", 11, "number"),
+    new Column("Invoiced", 16, "money"), new Column("Collected", 16, "money"),
+    new Column("Still Owed", 16, "money")];
+  sheet.rows = report.bookers.map((b) => [b.booker, b.bookings, b.pending, b.converted,
+    b.booked_value, b.orders, b.order_value, b.invoices, b.invoiced, b.collected,
+    b.outstanding]);
+  sheet.totals = ["Total", t.bookings, t.pending, t.converted, t.booked_value, t.orders,
+    t.order_value, t.invoices, t.invoiced, t.collected, t.outstanding];
+
+  return { filename: stamped(`${business} Booker Report`), data: write([sheet]) };
+}
+
+function costingBook(ctx, query) {
+  const report = dispatch(ctx, "GET", "/api/reports/costing", null, query);
+  const period = `${report.from} to ${report.to}`;
+  const business = businessName(ctx.db);
+  const s = report.summary;
+
+  const overview = new Sheet("Summary", `${business} - Costing & Profit`, period);
+  overview.columns = [new Column("Figure", 30), new Column("Amount", 18, "money")];
+  overview.rows = [
+    ["Sold", s.revenue], ["What it cost us", s.cost_of_sales], ["Profit", s.profit],
+    ["Margin %", s.margin], ["Items that sold", s.items_sold],
+    ["Priced below cost", s.sold_below_cost], ["No cost recorded", s.no_cost_recorded],
+  ];
+
+  const detail = new Sheet("Item by Item", "Costing by Item", period);
+  detail.columns = [new Column("Code", 12), new Column("Item", 40), new Column("Category", 20),
+    new Column("Cost", 14, "money"), new Column("Sale Price", 14, "money"),
+    new Column("Per Unit", 14, "money"), new Column("Qty Sold", 13, "number"),
+    new Column("Revenue", 16, "money"), new Column("Cost of Sales", 16, "money"),
+    new Column("Profit", 16, "money"), new Column("Margin %", 12, "number")];
+  detail.rows = report.items.map((i) => [i.sku, i.name, i.category, i.cost, i.price,
+    i.unit_margin, i.qty_sold, i.revenue, i.cost_of_sales, i.profit, i.margin]);
+  detail.totals = ["", "Total", "", "", "", "", "", s.revenue, s.cost_of_sales,
+    s.profit, s.margin];
+
+  const attention = new Sheet("Needs Attention", "Prices worth checking", period);
+  attention.columns = [new Column("Why", 26), new Column("Code", 12), new Column("Item", 40),
+    new Column("Cost", 14, "money"), new Column("Sale Price", 14, "money"),
+    new Column("Per Unit", 14, "money")];
+  attention.rows = [
+    ...report.sold_below_cost.map((i) =>
+      ["Priced below cost", i.sku, i.name, i.cost, i.price, i.unit_margin]),
+    ...report.no_cost_recorded.map((i) =>
+      ["No cost recorded", i.sku, i.name, i.cost, i.price, i.unit_margin]),
+  ];
+
+  return { filename: stamped(`${business} Costing Report`),
+    data: write([overview, detail, attention]) };
+}
+
 const BOOKS = {
   "/api/reports/sales/export": salesBook,
   "/api/reports/purchases/export": purchasesBook,
   "/api/reports/inventory/export": inventoryBook,
   "/api/products/export": productsBook,
+  "/api/reports/bookers/export": bookersBook,
+  "/api/reports/costing/export": costingBook,
 };
 
 export function isExport(path) {

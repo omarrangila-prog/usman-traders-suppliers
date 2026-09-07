@@ -411,6 +411,8 @@ table.data tbody tr { transition: background .12s var(--ease); }
 table.data tbody tr:hover { background: var(--surface-2); }
 table.data tbody tr:last-child td { border-bottom: 0; }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A figure that is losing money. Worth seeing without reading the number. */
+td.bad, .num.bad { color: var(--brand); font-weight: 600; }
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .mono {
   font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;

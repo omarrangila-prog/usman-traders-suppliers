@@ -622,11 +622,11 @@ route("POST", "/api/orders/(\\d+)/invoice", (ctx, orderId) => {
   const invoiceNo = nextNumber(ctx.db, "invoices", "invoice_no", "INV");
   const { id: invoiceId } = ctx.db.run(
     `INSERT INTO invoices (invoice_no, order_id, customer_id, invoice_date, due_date,
-                           subtotal, discount, tax, total, paid, status, notes)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+                           subtotal, discount, tax, total, paid, status, notes, booker)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [invoiceNo, orderId, order.customer_id, text(ctx.body.invoice_date, today()) || today(),
       text(ctx.body.due_date), order.subtotal, order.discount, order.tax, order.total,
-      0, "Unpaid", text(ctx.body.notes, order.notes)]);
+      0, "Unpaid", text(ctx.body.notes, order.notes), order.booker || ""]);
   for (const item of ctx.db.all("SELECT * FROM order_items WHERE order_id = ?", [orderId])) {
     ctx.db.run(
       `INSERT INTO invoice_items (invoice_id, product_id, qty, price, line_total)
@@ -990,6 +990,116 @@ function reportInventory(ctx) {
 }
 
 route("GET", "/api/reports/inventory", reportInventory);
+
+/**
+ * What each booker brought in.
+ *
+ * Counted from the bookings they took and the orders and invoices those became,
+ * so a booking still sitting unconverted is visible as work done rather than
+ * disappearing until someone in the office acts on it.
+ */
+function reportBookers(ctx) {
+  ctx.requireUser();
+  const start = text(ctx.query.from, monthStart()) || monthStart();
+  const end = text(ctx.query.to, today()) || today();
+  const db = ctx.db;
+
+  const bookings = db.all(
+    `SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+            COUNT(*) AS bookings,
+            SUM(CASE WHEN status = 'Pending'   THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status = 'Converted' THEN 1 ELSE 0 END) AS converted,
+            SUM(CASE WHEN status = 'Rejected'  THEN 1 ELSE 0 END) AS rejected,
+            ROUND(COALESCE(SUM(total),0),2) AS booked_value
+     FROM field_entries
+     WHERE COALESCE(NULLIF(entry_date,''), DATE(captured_at)) BETWEEN ? AND ?
+     GROUP BY 1`, [start, end]);
+
+  const ordered = db.all(
+    `SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+            COUNT(*) AS orders, ROUND(COALESCE(SUM(total),0),2) AS order_value
+     FROM orders WHERE order_date BETWEEN ? AND ? AND status <> 'Cancelled'
+     GROUP BY 1`, [start, end]);
+
+  const billed = db.all(
+    `SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+            COUNT(*) AS invoices,
+            ROUND(COALESCE(SUM(total),0),2) AS invoiced,
+            ROUND(COALESCE(SUM(paid),0),2) AS collected,
+            ROUND(COALESCE(SUM(total - paid),0),2) AS outstanding
+     FROM invoices WHERE invoice_date BETWEEN ? AND ? GROUP BY 1`, [start, end]);
+
+  const blank = () => ({ bookings: 0, pending: 0, converted: 0, rejected: 0,
+    booked_value: 0, orders: 0, order_value: 0, invoices: 0, invoiced: 0,
+    collected: 0, outstanding: 0 });
+  const people = new Map();
+  for (const source of [bookings, ordered, billed]) {
+    for (const row of source) {
+      const entry = people.get(row.booker) || { booker: row.booker, ...blank() };
+      for (const [k, v] of Object.entries(row)) if (k !== "booker") entry[k] = v;
+      people.set(row.booker, entry);
+    }
+  }
+  const listed = [...people.values()].sort((a, b) =>
+    (b.invoiced - a.invoiced) || (b.order_value - a.order_value));
+  const total = {};
+  for (const key of Object.keys(blank())) {
+    total[key] = round2(sum(listed, (r) => r[key]));
+  }
+  return { from: start, to: end, bookers: listed, total };
+}
+
+route("GET", "/api/reports/bookers", reportBookers);
+
+/**
+ * What each item costs, what it sells for, and what is left.
+ *
+ * Cost is the price last paid for the item, which is what the books value stock
+ * at, so the profit here is the same profit the accounts report rather than a
+ * second opinion that disagrees with them.
+ */
+function reportCosting(ctx) {
+  ctx.requireUser();
+  const start = text(ctx.query.from, monthStart()) || monthStart();
+  const end = text(ctx.query.to, today()) || today();
+
+  const items = ctx.db.all(
+    `SELECT p.sku, p.name, p.unit, p.category,
+            p.purchase_price AS cost, p.sale_price AS price,
+            ROUND(COALESCE(SUM(ii.qty),0),2) AS qty_sold,
+            ROUND(COALESCE(SUM(ii.line_total),0),2) AS revenue,
+            ROUND(COALESCE(SUM(ii.qty * p.purchase_price),0),2) AS cost_of_sales
+     FROM products p
+     LEFT JOIN invoice_items ii ON ii.product_id = p.id
+     LEFT JOIN invoices i ON i.id = ii.invoice_id
+          AND i.invoice_date BETWEEN ? AND ?
+     WHERE p.active = 1 AND (i.id IS NOT NULL OR ii.id IS NULL)
+     GROUP BY p.id ORDER BY revenue DESC, p.name`, [start, end]);
+
+  for (const item of items) {
+    item.profit = round2(item.revenue - item.cost_of_sales);
+    item.margin = item.revenue ? round2(item.profit / item.revenue * 100) : 0;
+    // what one unit makes, for items that have not sold yet
+    item.unit_margin = round2(item.price - item.cost);
+    item.unit_margin_pct = item.price
+      ? round2((item.price - item.cost) / item.price * 100) : 0;
+  }
+
+  const sold = items.filter((i) => i.qty_sold);
+  const revenue = round2(sum(sold, (i) => i.revenue));
+  const costOfSales = round2(sum(sold, (i) => i.cost_of_sales));
+  const below = items.filter((i) => i.price && i.cost && i.price < i.cost);
+  const unpriced = items.filter((i) => !i.cost);
+  return { from: start, to: end, items,
+    summary: { revenue, cost_of_sales: costOfSales,
+      profit: round2(revenue - costOfSales),
+      margin: revenue ? round2((revenue - costOfSales) / revenue * 100) : 0,
+      items_sold: sold.length, sold_below_cost: below.length,
+      no_cost_recorded: unpriced.length },
+    sold_below_cost: below.slice(0, 20), no_cost_recorded: unpriced.slice(0, 20) };
+}
+
+route("GET", "/api/reports/costing", reportCosting);
 
 // --------------------------------------------------------------- bookkeeping
 //
@@ -1568,9 +1678,10 @@ route("POST", "/api/field/entries/(\\d+)/convert", (ctx, entryId) => {
     number = nextNumber(ctx.db, "orders", "order_no", "ORD");
     newId = ctx.db.run(
       `INSERT INTO orders (order_no, customer_id, order_date, status,
-                           delivery_status, notes, subtotal, total)
-       VALUES (?,?,?, 'Pending', 'Not Dispatched', ?,?,?)`,
-      [number, party.id, entry.entry_date, note, subtotal, subtotal]).id;
+                           delivery_status, notes, booker, subtotal, total)
+       VALUES (?,?,?, 'Pending', 'Not Dispatched', ?,?,?,?)`,
+      [number, party.id, entry.entry_date, note, entry.booker || "",
+        subtotal, subtotal]).id;
     for (const item of items) {
       ctx.db.run(
         `INSERT INTO order_items (order_id, product_id, qty, price, line_total)

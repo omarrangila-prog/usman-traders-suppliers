@@ -47,6 +47,10 @@ jobs:
         working-directory: electron
         run: node test/operations.js
 
+      - name: Booker and costing figures must match what was worked out on paper
+        working-directory: electron
+        run: node test/booker-and-costing.js
+
       - name: A day in the shop must work end to end
         working-directory: electron
         run: node test/a-day-in-the-shop.js

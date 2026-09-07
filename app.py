@@ -747,11 +747,12 @@ def invoice_from_order(ctx, order_id):
     invoice_no = db.next_number(ctx.conn, "invoices", "invoice_no", "INV")
     cur = ctx.conn.execute(
         """INSERT INTO invoices (invoice_no, order_id, customer_id, invoice_date, due_date,
-                                 subtotal, discount, tax, total, paid, status, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 subtotal, discount, tax, total, paid, status, notes, booker)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (invoice_no, order_id, order["customer_id"], text(ctx.body.get("invoice_date"), today()) or today(),
          text(ctx.body.get("due_date")), order["subtotal"], order["discount"], order["tax"],
-         order["total"], 0, "Unpaid", text(ctx.body.get("notes"), order["notes"])))
+         order["total"], 0, "Unpaid", text(ctx.body.get("notes"), order["notes"]),
+         order["booker"] or ""))
     invoice_id = cur.lastrowid
     for item in ctx.conn.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall():
         ctx.conn.execute(
@@ -1147,6 +1148,108 @@ def report_inventory(ctx):
 
 
 
+@route("GET", r"/api/reports/bookers")
+def report_bookers(ctx):
+    """What each booker brought in.
+
+    Counted from the bookings they took and the orders and invoices those
+    became, so a booking still sitting unconverted is visible as work done
+    rather than disappearing until someone in the office acts on it."""
+    ctx.require_user()
+    start = text(ctx.query.get("from"), datetime.now().strftime("%Y-%m-01"))
+    end = text(ctx.query.get("to"), today())
+    conn = ctx.conn
+
+    bookings = rows(conn.execute(
+        """SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+                  COUNT(*) AS bookings,
+                  SUM(CASE WHEN status = 'Pending'   THEN 1 ELSE 0 END) AS pending,
+                  SUM(CASE WHEN status = 'Converted' THEN 1 ELSE 0 END) AS converted,
+                  SUM(CASE WHEN status = 'Rejected'  THEN 1 ELSE 0 END) AS rejected,
+                  ROUND(COALESCE(SUM(total),0),2) AS booked_value
+           FROM field_entries
+           WHERE COALESCE(NULLIF(entry_date,''), DATE(captured_at)) BETWEEN ? AND ?
+           GROUP BY 1""", (start, end)))
+
+    ordered = rows(conn.execute(
+        """SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+                  COUNT(*) AS orders, ROUND(COALESCE(SUM(total),0),2) AS order_value
+           FROM orders WHERE order_date BETWEEN ? AND ? AND status <> 'Cancelled'
+           GROUP BY 1""", (start, end)))
+
+    billed = rows(conn.execute(
+        """SELECT COALESCE(NULLIF(booker,''),'(not named)') AS booker,
+                  COUNT(*) AS invoices,
+                  ROUND(COALESCE(SUM(total),0),2) AS invoiced,
+                  ROUND(COALESCE(SUM(paid),0),2) AS collected,
+                  ROUND(COALESCE(SUM(total - paid),0),2) AS outstanding
+           FROM invoices WHERE invoice_date BETWEEN ? AND ? GROUP BY 1""", (start, end)))
+
+    people = {}
+    for source in (bookings, ordered, billed):
+        for row in source:
+            people.setdefault(row["booker"], {"booker": row["booker"], "bookings": 0,
+                "pending": 0, "converted": 0, "rejected": 0, "booked_value": 0,
+                "orders": 0, "order_value": 0, "invoices": 0, "invoiced": 0,
+                "collected": 0, "outstanding": 0}).update(
+                    {k: v for k, v in row.items() if k != "booker"})
+
+    listed = sorted(people.values(), key=lambda r: -r["invoiced"] or -r["order_value"])
+    total = {key: round(sum(r[key] for r in listed), 2) for key in
+             ("bookings", "pending", "converted", "rejected", "booked_value",
+              "orders", "order_value", "invoices", "invoiced", "collected", "outstanding")}
+    return {"from": start, "to": end, "bookers": listed, "total": total}
+
+
+@route("GET", r"/api/reports/costing")
+def report_costing(ctx):
+    """What each item costs, what it sells for, and what is left.
+
+    Cost is the price last paid for the item, which is what the books value
+    stock at, so the profit here is the same profit the accounts report rather
+    than a second opinion that disagrees with them."""
+    ctx.require_user()
+    start = text(ctx.query.get("from"), datetime.now().strftime("%Y-%m-01"))
+    end = text(ctx.query.get("to"), today())
+    conn = ctx.conn
+
+    items = rows(conn.execute(
+        """SELECT p.sku, p.name, p.unit, p.category,
+                  p.purchase_price AS cost, p.sale_price AS price,
+                  ROUND(COALESCE(SUM(ii.qty),0),2) AS qty_sold,
+                  ROUND(COALESCE(SUM(ii.line_total),0),2) AS revenue,
+                  ROUND(COALESCE(SUM(ii.qty * p.purchase_price),0),2) AS cost_of_sales
+           FROM products p
+           LEFT JOIN invoice_items ii ON ii.product_id = p.id
+           LEFT JOIN invoices i ON i.id = ii.invoice_id
+                AND i.invoice_date BETWEEN ? AND ?
+           WHERE p.active = 1 AND (i.id IS NOT NULL OR ii.id IS NULL)
+           GROUP BY p.id ORDER BY revenue DESC, p.name""", (start, end)))
+
+    for item in items:
+        item["profit"] = round(item["revenue"] - item["cost_of_sales"], 2)
+        item["margin"] = round(item["profit"] / item["revenue"] * 100, 1) if item["revenue"] else 0
+        # what one unit makes, for items that have not sold yet
+        item["unit_margin"] = round(item["price"] - item["cost"], 2)
+        item["unit_margin_pct"] = round(
+            (item["price"] - item["cost"]) / item["price"] * 100, 1) if item["price"] else 0
+
+    sold = [i for i in items if i["qty_sold"]]
+    revenue = round(sum(i["revenue"] for i in sold), 2)
+    cost_of_sales = round(sum(i["cost_of_sales"] for i in sold), 2)
+    below = [i for i in items if i["price"] and i["cost"] and i["price"] < i["cost"]]
+    unpriced = [i for i in items if not i["cost"]]
+    return {"from": start, "to": end, "items": items,
+            "summary": {"revenue": revenue, "cost_of_sales": cost_of_sales,
+                        "profit": round(revenue - cost_of_sales, 2),
+                        "margin": round((revenue - cost_of_sales) / revenue * 100, 1)
+                                  if revenue else 0,
+                        "items_sold": len(sold),
+                        "sold_below_cost": len(below),
+                        "no_cost_recorded": len(unpriced)},
+            "sold_below_cost": below[:20], "no_cost_recorded": unpriced[:20]}
+
+
 # --------------------------------------------------------------------------
 # Bookkeeping
 #
@@ -1367,11 +1470,11 @@ def field_sync(ctx):
         items = raw.get("items") or []
         total = round(sum(num(i.get("qty")) * num(i.get("price")) for i in items), 2)
         ctx.conn.execute(
-            """INSERT INTO field_entries (client_id, kind, party_name, phone, city,
+            """INSERT INTO field_entries (client_id, booker, kind, party_name, phone, city,
                                           entry_date, notes, items, total, device,
                                           captured_at, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'Pending')""",
-            (client_id,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Pending')""",
+            (client_id, text(raw.get("booker"))[:80],
              "Purchase" if text(raw.get("kind")) == "Purchase" else "Booking",
              text(raw.get("party_name"))[:200], text(raw.get("phone"))[:40],
              text(raw.get("city"))[:80], text(raw.get("entry_date"), today()) or today(),
@@ -1457,9 +1560,10 @@ def convert_field_entry(ctx, entry_id):
         number = db.next_number(ctx.conn, "orders", "order_no", "ORD")
         cur = ctx.conn.execute(
             """INSERT INTO orders (order_no, customer_id, order_date, status,
-                                   delivery_status, notes, subtotal, total)
-               VALUES (?,?,?, 'Pending', 'Not Dispatched', ?,?,?)""",
-            (number, party_id, entry["entry_date"], note, subtotal, subtotal))
+                                   delivery_status, notes, booker, subtotal, total)
+               VALUES (?,?,?, 'Pending', 'Not Dispatched', ?,?,?,?)""",
+            (number, party_id, entry["entry_date"], note, entry["booker"] or "",
+             subtotal, subtotal))
         new_id = cur.lastrowid
         for item in items:
             ctx.conn.execute(
@@ -2038,6 +2142,78 @@ def export_inventory(ctx):
     stock.totals = ["", "Total", "", "", "", "", "", "", summary["cost_value"], ""]
 
     return workbook_response([overview, categories, stock], f"{business} Inventory Report")
+
+
+@route("GET", r"/api/reports/bookers/export")
+def export_bookers(ctx):
+    report = report_bookers(ctx)
+    period = f"{report['from']} to {report['to']}"
+    business = company_name(ctx.conn)
+    total = report["total"]
+
+    sheet = xlsx.Sheet("By Booker", f"{business} - Booker Report", period)
+    sheet.columns = [xlsx.Column("Booker", 26), xlsx.Column("Bookings", 12, "number"),
+                     xlsx.Column("Waiting", 11, "number"), xlsx.Column("Converted", 12, "number"),
+                     xlsx.Column("Value Booked", 16, "money"), xlsx.Column("Orders", 11, "number"),
+                     xlsx.Column("Order Value", 16, "money"), xlsx.Column("Invoices", 11, "number"),
+                     xlsx.Column("Invoiced", 16, "money"), xlsx.Column("Collected", 16, "money"),
+                     xlsx.Column("Still Owed", 16, "money")]
+    sheet.rows = [[b["booker"], b["bookings"], b["pending"], b["converted"], b["booked_value"],
+                   b["orders"], b["order_value"], b["invoices"], b["invoiced"],
+                   b["collected"], b["outstanding"]] for b in report["bookers"]]
+    sheet.totals = ["Total", total["bookings"], total["pending"], total["converted"],
+                    total["booked_value"], total["orders"], total["order_value"],
+                    total["invoices"], total["invoiced"], total["collected"],
+                    total["outstanding"]]
+    return workbook_response([sheet], f"{business} Booker Report")
+
+
+@route("GET", r"/api/reports/costing/export")
+def export_costing(ctx):
+    report = report_costing(ctx)
+    period = f"{report['from']} to {report['to']}"
+    business = company_name(ctx.conn)
+    summary = report["summary"]
+
+    overview = xlsx.Sheet("Summary", f"{business} - Costing & Profit", period)
+    overview.columns = [xlsx.Column("Figure", 30), xlsx.Column("Amount", 18, "money")]
+    overview.rows = [
+        ["Sold", summary["revenue"]],
+        ["What it cost us", summary["cost_of_sales"]],
+        ["Profit", summary["profit"]],
+        ["Margin %", summary["margin"]],
+        ["Items that sold", summary["items_sold"]],
+        ["Priced below cost", summary["sold_below_cost"]],
+        ["No cost recorded", summary["no_cost_recorded"]],
+    ]
+
+    detail = xlsx.Sheet("Item by Item", "Costing by Item", period)
+    detail.columns = [xlsx.Column("Code", 12), xlsx.Column("Item", 40),
+                      xlsx.Column("Category", 20), xlsx.Column("Cost", 14, "money"),
+                      xlsx.Column("Sale Price", 14, "money"),
+                      xlsx.Column("Per Unit", 14, "money"),
+                      xlsx.Column("Qty Sold", 13, "number"),
+                      xlsx.Column("Revenue", 16, "money"),
+                      xlsx.Column("Cost of Sales", 16, "money"),
+                      xlsx.Column("Profit", 16, "money"), xlsx.Column("Margin %", 12, "number")]
+    detail.rows = [[i["sku"], i["name"], i["category"], i["cost"], i["price"],
+                    i["unit_margin"], i["qty_sold"], i["revenue"], i["cost_of_sales"],
+                    i["profit"], i["margin"]] for i in report["items"]]
+    detail.totals = ["", "Total", "", "", "", "", "", summary["revenue"],
+                     summary["cost_of_sales"], summary["profit"], summary["margin"]]
+
+    attention = xlsx.Sheet("Needs Attention", "Prices worth checking", period)
+    attention.columns = [xlsx.Column("Why", 26), xlsx.Column("Code", 12),
+                         xlsx.Column("Item", 40), xlsx.Column("Cost", 14, "money"),
+                         xlsx.Column("Sale Price", 14, "money"),
+                         xlsx.Column("Per Unit", 14, "money")]
+    attention.rows = (
+        [["Priced below cost", i["sku"], i["name"], i["cost"], i["price"], i["unit_margin"]]
+         for i in report["sold_below_cost"]]
+        + [["No cost recorded", i["sku"], i["name"], i["cost"], i["price"], i["unit_margin"]]
+           for i in report["no_cost_recorded"]])
+
+    return workbook_response([overview, detail, attention], f"{business} Costing Report")
 
 
 @route("GET", r"/api/products/export")
