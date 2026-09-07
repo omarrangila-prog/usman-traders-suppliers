@@ -265,10 +265,18 @@ if rec["lines"]:
     after = call("GET", f"/reports/reconcile/{cash['id']}")
     check("a line can be ticked as cleared", after["cleared_balance"] != 0, after["cleared_balance"])
 
-req = urllib.request.Request(f"{BASE}/backup",
-                             headers={"Cookie": "; ".join(f"{k}={v}" for k, v in COOKIE.items())})
-backup = urllib.request.urlopen(req, timeout=60).read()
-check("database backup downloads", backup[:15].startswith(b"SQLite format"), backup[:15])
+# The backup hands over the SQLite file. With the data in Postgres there is no
+# such file, and the app says so rather than sending something misleading -
+# which is correct, so that is what is checked when running that way.
+if call("GET", "/health")["storage"] == "postgres":
+    refused = call("GET", "/backup", expect=400)
+    check("backup explains there is no file to send on Postgres",
+          "postgres" in refused.get("error", "").lower(), refused)
+else:
+    req = urllib.request.Request(f"{BASE}/backup",
+                                 headers={"Cookie": "; ".join(f"{k}={v}" for k, v in COOKIE.items())})
+    backup = urllib.request.urlopen(req, timeout=60).read()
+    check("database backup downloads", backup[:15].startswith(b"SQLite format"), backup[:15])
 
 profit = call("GET", "/reports/profit-loss?from=2026-01-01&to=2026-12-31")["net_profit"]
 closed = call("POST", "/accounting/close", {"to": "2026-12-31", "confirm": "CLOSE"})
