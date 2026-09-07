@@ -11,7 +11,48 @@ on:
     tags: ["v*"]
 
 jobs:
+  # The desktop runs on SQLite and the web site on Postgres, and the two do not
+  # always mean the same thing by the same SQL. Two faults reached the live site
+  # that way, both working perfectly on SQLite, so the web half is now exercised
+  # against a real Postgres before anything ships.
+  web:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: usmantraders
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet -r requirements.txt
+
+      - name: It must survive a host with no writable home
+        run: python tests/hosted.py
+
+      - name: Every screen and report must answer on Postgres
+        env:
+          DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/usmantraders
+        run: python tests/dialect.py
+
+      - name: The shop's day must behave on Postgres
+        env:
+          DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/usmantraders
+          UT_PG_SCHEMA: regression
+        run: |
+          UT_LOGIN=off python app.py 8811 &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8811/api/health && break; sleep 1; done
+          python tests/regression.py 8811 --no-login
+
   build:
+    needs: web
     runs-on: windows-latest
     permissions:
       contents: write
@@ -29,15 +70,6 @@ jobs:
       - name: Install
         working-directory: electron
         run: npm install --no-audit --no-fund
-
-      # The web half must survive a host with a read-only filesystem and no
-      # home directory. Getting this wrong takes the site down on every request.
-      # It needs the database driver the host installs, or it cannot get far
-      # enough to test anything.
-      - name: The web version must survive hosted conditions
-        run: |
-          python -m pip install --quiet -r requirements.txt
-          python tests/hosted.py
 
       - name: The figures must match what was worked out on paper
         working-directory: electron

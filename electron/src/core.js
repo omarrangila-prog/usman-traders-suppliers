@@ -1012,7 +1012,7 @@ function reportBookers(ctx) {
             SUM(CASE WHEN status = 'Rejected'  THEN 1 ELSE 0 END) AS rejected,
             ROUND(COALESCE(SUM(total),0),2) AS booked_value
      FROM field_entries
-     WHERE COALESCE(NULLIF(entry_date,''), DATE(captured_at)) BETWEEN ? AND ?
+     WHERE COALESCE(NULLIF(entry_date,''), SUBSTR(captured_at, 1, 10)) BETWEEN ? AND ?
      GROUP BY 1`, [start, end]);
 
   const ordered = db.all(
