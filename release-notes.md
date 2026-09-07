@@ -1,54 +1,43 @@
-Two new reports: **who brought the work in**, and **what it actually earned**.
+**Bookers Report** now has its own place in the menu, under Insights, rather
+than being buried in a dropdown. **Costing & Profit** is beside it.
 
-## Booker report
+Both still work as tabs on the Reports screen, and both still download to Excel.
 
-Bookings recorded only which phone they came from — a device number, no use for
-asking someone about an order or for paying commission on it.
+## A fault in that change, caught before release
 
-The booking form now asks the booker's name once and remembers it on that phone.
-The name travels with the booking, onto the order it becomes, and onto the
-invoice after that — so the office can see, per person:
+Giving them their own menu entries meant the Reports screen could be opened
+straight onto a chosen report. The screen was written to fall back to the sales
+report when nothing was named — but the menu hands a view an empty list, and an
+empty list counts as *something* in JavaScript. The Reports screen would have
+opened onto nothing at all. It now insists on an actual name.
 
-- bookings taken, and how many are **still waiting** to be dealt with
-- the value they booked
-- orders raised from those bookings
-- **invoiced, collected, and still owed**
+## Prices corrected in your live data
 
-**Reports → Booker report.** Field Entries now names the person too, instead of
-showing a device number.
+Every order line was compared against the item master. Four differed; two were
+unmistakable and have been corrected:
 
-## Costing and profit
+| Order | Shop | What was wrong | Now |
+| --- | --- | --- | --- |
+| ORD-0003 | B s gernal store | `00001` at Rs 100 each — three other orders sell the identical line at Rs 10 | Rs 10 · order **2,400 → 240** |
+| ORD-0004 | Nosheen General St | `00040` at Rs 0 — free. ORD-0008 sells the identical line at Rs 10 | Rs 10 · order **960 → 1,200** |
 
-**Reports → Costing & profit.** Item by item: what it costs, what it sells for,
-what one unit makes, how many sold, and the profit and margin on them.
+`00040 SAVHET RED CHILLI POWDER` had no price in the item master at all, which
+is how it could be booked free. It is now Rs 10, the price it is sold at
+everywhere else.
 
-It also flags two things worth knowing about:
+All ten orders were Pending, undelivered and uninvoiced, so nothing had to be
+unwound and no stock or accounting entry was affected.
 
-- items **priced below what they cost** — every sale loses money
-- items with **no cost recorded**, which look like pure profit until a purchase
-  sets one
+**Two were left alone**, because guessing would have been a ten-fold error
+either way — see below.
 
-Cost is the price last paid for the item, which is what the books value stock
-at. That is deliberate: the profit shown here is the same profit the accounts
-report, not a second opinion that disagrees with them. The test checks that they
-match.
+## What still needs asking
 
-Both reports download to Excel like the others.
+Two orders read *quantity 1 at Rs 100* for items listed at Rs 10:
 
-## What was checked
+- **ORD-0005 — Subhnai store** — `00001` ACHAR SACHET RS;10
+- **ORD-0010 — Mehar general store** — `00060` AJEENO MOTO SACHET RS10
 
-The figures are worked out on paper first, then compared: two bookers, three
-bookings, one still pending, known prices and known costs. Asif books 1,400,
-converts one, invoices 1,000, collects 400, is owed 600. 160 units sold at 10
-bought at 6 gives revenue 1,600, cost 960, profit 640, margin 40% — and the
-accounts agree.
-
-That runs alongside the existing 25 hand-computed figures, 81 operations, a day
-in the shop across all screens, 54 sharing checks and 30 awkward situations.
-
-## One fix
-
-A test was written against fixed dates in August while checking figures the
-program reports for "this month". It passed in August and would have failed on
-the first of every month afterwards, for no real reason. It now uses the current
-month.
+Either the quantity is wrong (10 pieces at Rs 10 = Rs 100, total correct) or the
+price is (1 piece at Rs 10 = Rs 10, total wrong). Only the booker knows which.
+Both are untouched until you have asked.

@@ -384,6 +384,10 @@ const ROUTES = [
   { path: "aging", title: "Aging & Collections", icon: "◔", group: "Accounting", view: viewAging },
   { path: "assets", title: "Fixed Assets", icon: "▣", group: "Accounting", view: viewAssets },
   { path: "reports", title: "Reports", icon: "▧", group: "Insights", view: viewReports },
+  { path: "bookers", title: "Bookers Report", icon: "◍", group: "Insights",
+    view: () => viewReports("bookers") },
+  { path: "costing", title: "Costing & Profit", icon: "₨", group: "Insights",
+    view: () => viewReports("costing") },
   { path: "company", title: "Company Profile", icon: "★", group: "Settings", view: viewCompany },
   { path: "users", title: "Users & Access", icon: "◈", group: "Settings", view: viewUsers, adminOnly: true },
 ];
@@ -2229,8 +2233,10 @@ async function viewFinancials() {
 
 // ----------------------------------------------------------------- reports
 
-async function viewReports() {
-  let tab = "sales";
+async function viewReports(openOn) {
+  // The router hands a view the rest of the address as an array, and an empty
+  // array is truthy - so this has to insist on a name, not merely something.
+  let tab = typeof openOn === "string" ? openOn : "sales";
   let from = monthStart();
   let to = today();
 
@@ -2389,11 +2395,11 @@ async function viewReports() {
   el("content").innerHTML = `
     <div class="toolbar">
       <select id="r-tab">
-        <option value="sales">Sales report</option>
-        <option value="purchases">Purchase report</option>
-        <option value="inventory">Inventory report</option>
-        <option value="bookers">Booker report</option>
-        <option value="costing">Costing &amp; profit</option>
+        <option value="sales"${tab === "sales" ? " selected" : ""}>Sales report</option>
+        <option value="purchases"${tab === "purchases" ? " selected" : ""}>Purchase report</option>
+        <option value="inventory"${tab === "inventory" ? " selected" : ""}>Inventory report</option>
+        <option value="bookers"${tab === "bookers" ? " selected" : ""}>Bookers report</option>
+        <option value="costing"${tab === "costing" ? " selected" : ""}>Costing &amp; profit</option>
       </select>
       <label class="field" id="date-from">From <input type="date" id="r-from" value="${from}"></label>
       <label class="field" id="date-to">To <input type="date" id="r-to" value="${to}"></label>
